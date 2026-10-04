@@ -69,7 +69,6 @@ class Settings(BaseSettings):
         return f"postgresql+psycopg://{self.DB_USERNAME}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
     # 是否由应用自动建表（开发环境用）。生产环境建议 False，改用 Aerich：aerich upgrade
-    auto_create_tables: bool = True
 
 
 

@@ -1,6 +1,6 @@
 from enum import StrEnum
 from datetime import datetime
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from app.core.db import BaseModel
 
@@ -11,7 +11,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .user import UserModel, DepartmentModel
-from .candidate import CandidateModel
+
+if TYPE_CHECKING:
+    from .candidate import CandidateModel
 
 
 
@@ -47,4 +49,4 @@ class PositionModel(BaseModel):
     department: Mapped["DepartmentModel"] = relationship(lazy="joined")
     creator: Mapped["UserModel"] = relationship(lazy="joined")
     #候选人信息
-    candidates: Mapped[List["CandidateModel"]] = relationship(back_populates="position")
+    candidates: Mapped[List["CandidateModel"]] = relationship("CandidateModel", back_populates="position")

@@ -1,5 +1,5 @@
 from enum import StrEnum
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import (
     String, Text, Integer,Enum as SQLAlchemyEnum, ForeignKey,JSON
@@ -8,7 +8,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import BaseModel
 from .user import UserModel
-from .position import PositionModel
+
+if TYPE_CHECKING:
+    from .position import PositionModel
 
 
 class CandidateStatusEnum(StrEnum):
@@ -65,7 +67,7 @@ class CandidateModel(BaseModel):
     # 这条数据是由谁创建的
     creator_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
 
-    position: Mapped["PositionModel"] = relationship(back_populates="candidates", lazy="joined")
+    position: Mapped["PositionModel"] = relationship("PositionModel", back_populates="candidates", lazy="joined")
     resume: Mapped["ResumeModel"] = relationship(back_populates="candidate", uselist=False, lazy="joined")
     creator: Mapped["UserModel"] = relationship(lazy="joined")
     ai_score: Mapped["CandidateAIScoreModel"] = relationship(back_populates="candidate", uselist=False)
