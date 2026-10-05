@@ -1,23 +1,23 @@
 from fastapi import APIRouter, HTTPException, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated, Optional
-from core.db import get_db
+from app.core.db import get_db
 from app.repository.user_repo import UserRepo
 from app.models.user import UserModel
-from core.redis_client import get_redis
-from schemas.user_schema import UserLoginSH, RefreshRequest, LogoutRequest
+from app.core.redis_client import get_redis
+from app.schemas.user_schema import UserLoginReqSH, UserLoginResSH, RefreshRequest, LogoutRequest
 from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user
 router = APIRouter(prefix="/user", tags=["user"])
 
-@router.get("/token",summary="登录")
+@router.post("/token",summary="登录",response_model=UserLoginResSH)
 async def login(
-    login_data:UserLoginSH,
+    login_data:UserLoginReqSH,
     session:Annotated[AsyncSession, Depends(get_db)]
 ):
     #开启事务
     async with session.begin():
         #1 get user
-        user_repo = UserRepo()
+        user_repo = UserRepo(session)
         user:Optional[UserModel] = await user_repo.get_by_email(str(login_data.email))
         #2 验证user
         if not user:
@@ -31,6 +31,7 @@ async def login(
             "access_token": tokens["access_token"],
             "refresh_token": tokens["refresh_token"],
             "token_type": tokens["token_type"],
+            "user": user
         }
 
 

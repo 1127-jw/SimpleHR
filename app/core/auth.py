@@ -15,8 +15,8 @@ settings = get_settings()
 
 
 # 建议从环境变量读取
-ACCESS_SECRET = os.getenv("ACCESS_SECRET", "change-access-secret")
-REFRESH_SECRET = os.getenv("REFRESH_SECRET", "change-refresh-secret")
+ACCESS_SECRET = settings.ACCESS_SECRET
+REFRESH_SECRET = settings.REFRESH_SECRET
 ALGORITHM = "HS256"
 
 ACCESS_EXPIRE_MINUTES = 30
@@ -113,7 +113,7 @@ async def revoke_refresh_token(refresh_token: str, r: Redis) -> None:
 
 
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/user/token")
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     try:

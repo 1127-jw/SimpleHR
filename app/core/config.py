@@ -71,9 +71,9 @@ class Settings(BaseSettings):
     REFRESH_EXPIRE_DAYS: int = 7
 
     # ---------- Redis ----------
-    REDIS_HOST = "localhost"
-    REDIS_PORT = 6379
-    REDIS_DB =  0
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int =  0
 
 
     @computed_field

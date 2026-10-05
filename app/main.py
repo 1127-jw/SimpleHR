@@ -1,10 +1,21 @@
+import sys
+import asyncio
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    # 强制 uvicorn 在 Windows 上使用 SelectorEventLoop
+    import uvicorn.loops.asyncio as _uvicorn_asyncio_loop
+    _uvicorn_asyncio_loop.asyncio_loop_factory = lambda use_subprocess=False: asyncio.SelectorEventLoop
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
-from routers.user_router import router as user_router
+from app.routers.user_router import router as user_router
 from contextlib import asynccontextmanager
 from app.core.redis_client import init_redis, close_redis
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
