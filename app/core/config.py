@@ -63,13 +63,28 @@ class Settings(BaseSettings):
     DB_PORT: int = 5432
     DB_NAME: str = "hr_system"
 
+    # ---------- JWT ----------
+    ACCESS_SECRET: str = ""
+    REFRESH_SECRET: str = ""
+    ALGORITHM: str = "HS256"
+    ACCESS_EXPIRE_MINUTES: int = 30
+    REFRESH_EXPIRE_DAYS: int = 7
+
+    # ---------- Redis ----------
+    REDIS_HOST = "localhost"
+    REDIS_PORT = 6379
+    REDIS_DB =  0
+
+
     @computed_field
     @property
     def database_url(self) -> str:
         return f"postgresql+psycopg://{self.DB_USERNAME}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
-    # 是否由应用自动建表（开发环境用）。生产环境建议 False，改用 Aerich：aerich upgrade
-
+    @computed_field
+    @property
+    def REDIS_URL(self) -> str:
+        return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
 
 

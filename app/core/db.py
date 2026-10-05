@@ -9,6 +9,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import DateTime, String
 from app.core.config import get_settings
 
+from typing import AsyncGenerator
+
 
 settings = get_settings()
 # 创建异步数据库引擎
@@ -64,10 +66,11 @@ class BaseModel(Base):
         onupdate=datetime.now
     )
 
-async def get_db():
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionFactory() as session:
         try:
             yield session
+            # await session.commit()
         except Exception:
             await session.rollback()
             raise
