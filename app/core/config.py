@@ -75,6 +75,16 @@ class Settings(BaseSettings):
     REDIS_PORT: int = 6379
     REDIS_DB: int =  0
 
+    # ---------- Email(网易163) ----------
+    MAIL_USERNAME: str = Field(..., validation_alias="MAIL_USERNAME")
+    MAIL_PASSWORD: str = Field(..., validation_alias="MAIL_PASSWORD")
+    MAIL_FROM: str = Field(..., validation_alias="MAIL_FROM")
+    MAIL_PORT: int = 465
+    MAIL_SERVER: str = "smtp.163.com"
+    MAIL_FROM_NAME: str = "SimpleHR"
+    MAIL_STARTTLS: bool = False
+    MAIL_SSL_TLS: bool = True
+
 
     @computed_field
     @property

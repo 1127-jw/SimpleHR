@@ -7,43 +7,40 @@ from app.models.user import UserModel
 from app.core.redis_client import get_redis
 from app.schemas.user_schema import UserLoginReqSH, UserLoginResSH, RefreshRequest, LogoutRequest
 from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user
+from app.service import auth_ser
+from redis.asyncio import Redis
 router = APIRouter(prefix="/user", tags=["user"])
 
 @router.post("/token",summary="登录",response_model=UserLoginResSH)
 async def login(
     login_data:UserLoginReqSH,
-    session:Annotated[AsyncSession, Depends(get_db)]
+    session:Annotated[AsyncSession, Depends(get_db)],
+    r: Redis = Depends(get_redis),
 ):
-    #开启事务
-    async with session.begin():
-        #1 get user
-        user_repo = UserRepo(session)
-        user:Optional[UserModel] = await user_repo.get_by_email(str(login_data.email))
-        #2 验证user
-        if not user:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,detail="no such user")
-        if not user.check_password(login_data.password):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,detail="wrong password")
-        r = await get_redis()
-        tokens = await create_tokens(login_data.email,r)
+    user = await auth_ser.authenticate_user(login_data.email,login_data.password,session)
+    tokens = await create_tokens(login_data.email,r)
 
-        return {
-            "access_token": tokens["access_token"],
-            "refresh_token": tokens["refresh_token"],
-            "token_type": tokens["token_type"],
-            "user": user
-        }
-
+    return {
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
+        "token_type": tokens["token_type"],
+        "user": user
+    }
 
 @router.post("/refresh")
-async def refresh(body: RefreshRequest):
-    r = await get_redis()
+async def refresh(
+        body: RefreshRequest,
+        r: Redis = Depends(get_redis),
+):
+
     return await refresh_access_token(body.refresh_token, r)
 
 
 @router.post("/logout")
-async def logout(body: LogoutRequest):
-    r = await get_redis()
+async def logout(
+        body: LogoutRequest,
+        r: Redis = Depends(get_redis),
+):
     await revoke_refresh_token(body.refresh_token, r)
     return {"detail": "Logged out"}
 
