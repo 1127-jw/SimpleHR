@@ -15,7 +15,7 @@ from typing import Annotated, Optional, Literal
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.repository.user_repo import UserRepo
-from app.models.user import UserModel
+from app.models.user import UserModel, UserStatus
 
 settings = get_settings()
 
@@ -141,9 +141,9 @@ async def get_current_user(
         user:Optional[UserModel] = await user_repo.get_by_email(str(payload["sub"]))
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,detail="User not found")
-        if user.status != "active":
+        if user.status != UserStatus.ACTIVE:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,detail="User not active")
-    return {"user": user}
+    return user
 
 async def get_super_user(
         current_user: UserModel = Depends(get_current_user),

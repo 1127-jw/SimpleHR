@@ -85,6 +85,8 @@ class Settings(BaseSettings):
     MAIL_STARTTLS: bool = False
     MAIL_SSL_TLS: bool = True
 
+    INVITE_EXPIRE_MINUTES: int = 30
+
 
     @computed_field
     @property

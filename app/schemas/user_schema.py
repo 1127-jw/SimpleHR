@@ -5,7 +5,7 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from app.models import DepartmentModel
 from app.models.user import UserStatus
 
-
+#---------JWT---------
 class UserLoginReqSH(BaseModel):
     email: EmailStr = Field(...,description="Email address")
     password: str = Field(...,description="Password",min_length=6,max_length=15)
@@ -44,6 +44,16 @@ class UserLoginResSH(BaseModel):
 class RefreshRequest(BaseModel):
     refresh_token: str
 
-
 class LogoutRequest(BaseModel):
     refresh_token: str
+
+#---------邀请注册---------
+
+class UserInviteSchema(BaseModel):
+    email: EmailStr = Field(...,description="Email address")
+    department_id: str = Field(...,description="Department ID")
+
+class InviteInfoSchema(BaseModel):
+    email: EmailStr
+    department_id: str
+    invite_code: str
