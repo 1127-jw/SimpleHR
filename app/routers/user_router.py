@@ -4,7 +4,7 @@ from typing import Annotated, List
 from app.core.db import get_db
 from app.core.redis_client import get_redis
 from app.schemas.user_schema import UserLoginReqSH, UserLoginResSH, RefreshRequest, LogoutRequest, UserInviteSchema, \
-    UserRegisterReqSchema, UserRegisterResSchema, UserListResponseSchema
+    UserRegisterReqSchema, UserRegisterResSchema, UserListResponseSchema, UserStatusUpdateSchema
 from app.schemas.response_schema import ResponseSchema
 from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user, get_super_user
 from app.service import auth_ser
@@ -91,3 +91,12 @@ async def list_users(
         "total": len(user_list),
         "items": user_list[(page - 1) * size : page * size],
     }
+
+@router.patch("/status/update",summary="修改员工状态", response_model=ResponseSchema)
+async def update_status(
+    status_data: UserStatusUpdateSchema,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: UserModel = Depends(get_super_user),
+):
+    await  auth_ser.update_user_status(session,status_data)
+    return ResponseSchema()

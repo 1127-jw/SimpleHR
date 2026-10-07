@@ -69,6 +69,9 @@ class UserRegisterResSchema(BaseModel):
     username: str = Field(...,description="Username")
 
 class UserListResponseSchema(BaseModel):
-    total: int
-    items: List[UserSH]
-    
+    total: int = Field(...,description="Total number of users")
+    items: List[UserSH] = Field(...,description="List of users")
+
+class UserStatusUpdateSchema(BaseModel):
+    email: EmailStr = Field(..., description="Email address")
+    status: UserStatus = Field(..., description="new status")

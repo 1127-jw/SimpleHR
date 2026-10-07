@@ -4,7 +4,7 @@ from typing import Annotated, Optional, List,Sequence
 from app.core.db import get_db
 from app.repository.user_repo import UserRepo
 from app.models.user import UserModel, UserStatus
-from app.schemas.user_schema import UserRegisterReqSchema
+from app.schemas.user_schema import UserRegisterReqSchema, UserStatusUpdateSchema
 from redis.asyncio import Redis
 
 async def authenticate_user(
@@ -68,3 +68,20 @@ async def get_list_users(
         user_repo = UserRepo(session)
         user_list = await user_repo.get_user_list(page, size, user.department_id)
         return user_list
+
+async def update_user_status(
+        session: Annotated[AsyncSession, Depends(get_db)],
+        status_data: UserStatusUpdateSchema,
+
+):
+    async with session.begin():
+        user_repo = UserRepo(session)
+        user: UserModel|None = await user_repo.get_by_email(str(status_data.email))
+        if not user:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该员工不存在！")
+        if user.is_superuser:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能修改超级用户的状态！")
+        user.status = status_data.status
+        return user
+
+
