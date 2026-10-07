@@ -3,7 +3,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated
 from app.core.db import get_db
 from app.core.redis_client import get_redis
-from app.schemas.user_schema import UserLoginReqSH, UserLoginResSH, RefreshRequest, LogoutRequest, UserInviteSchema
+from app.schemas.user_schema import UserLoginReqSH, UserLoginResSH, RefreshRequest, LogoutRequest, UserInviteSchema, \
+    UserRegisterReqSchema, UserRegisterResSchema
 from app.schemas.response_schema import ResponseSchema
 from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user, get_super_user
 from app.service import auth_ser
@@ -58,8 +59,22 @@ async def invite_user(
     background_tasks: BackgroundTasks,
     session:Annotated[AsyncSession, Depends(get_db)],
     r: Redis = Depends(get_redis),
-    _: UserModel = Depends(get_super_user),
+    user: UserModel = Depends(get_super_user),
 ):
-    invite_code = await get_invite_code(invite_data,session,r)
+    invite_code = await get_invite_code(invite_data,session,r,user.department_id)
     background_tasks.add_task(send_invite_email_task, str(invite_data.email), invite_code)
     return ResponseSchema()
+
+@router.post("/register",summary="注册", response_model=UserRegisterResSchema)
+async def register(
+    register_data: UserRegisterReqSchema,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    r: Redis = Depends(get_redis),
+
+):
+    user = await auth_ser.create_user(register_data,session,r)
+
+    return {
+        "email": user.email,
+        "username": user.username,
+    }

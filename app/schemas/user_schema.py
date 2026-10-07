@@ -57,3 +57,14 @@ class InviteInfoSchema(BaseModel):
     email: EmailStr
     department_id: str
     invite_code: str
+
+class UserRegisterReqSchema(BaseModel):
+    email: EmailStr = Field(...,description="Email address")
+    invite_code: str = Field(...,max_length=6,min_length=6,description="Invite code")
+    username: str = Field(...,description="Username")
+    realname: str = Field(...,description="Realname")
+    password: str = Field(...,max_length=15,min_length=6,description="Password")
+
+class UserRegisterResSchema(BaseModel):
+    email: EmailStr = Field(...,description="Email address")
+    username: str = Field(...,description="Username")

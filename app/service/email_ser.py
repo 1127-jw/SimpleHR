@@ -1,41 +1,18 @@
 import random
 import string
 from redis.asyncio import Redis
-from fastapi_mail import FastMail, MessageSchema
-from aiosmtplib import SMTPResponseException
-from loguru import logger
-from app.core.mail import create_mail_instance, settings
+from app.core.mail import settings
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException, status
 from app.repository.user_repo import UserRepo, DepartmentRepo
-from app.schemas.user_schema import UserInviteSchema, InviteInfoSchema
-
-# async def send_email_task(message: MessageSchema):
-#     # 发送邮件
-#     mail: FastMail = create_mail_instance()
-#     try:
-#         await mail.send_message(message)
-#     except SMTPResponseException as e:
-#         logger.error(f"邮件发送失败！{e}")
-#
-# async def send_invite_email_task(
-#     email: str,
-#     invite_code: str
-# ):
-#     # 发送邮件
-#     message = MessageSchema(
-#         subject="【SimpleHR】注册邀请",
-#         recipients=[email],
-#         body=f"您好，您的邮箱是：{email}，验证码是：{invite_code}，一天内有效。",
-#         subtype="plain"
-#     )
-#     await send_email_task(message)
+from app.schemas.user_schema import UserInviteSchema
 
 
 async def get_invite_code(
     invite_data: UserInviteSchema,
     session: AsyncSession,
     r:Redis,
+    user_department_id: str,
 ):
     async with session.begin():
         user_repo = UserRepo(session)
@@ -49,10 +26,15 @@ async def get_invite_code(
     # 生成6位数字验证码
     invite_code = "".join(random.sample(string.digits, 6))
     # 存储到redis缓存中
-
     await r.setex(
         f"invite:{invite_data.email}",
         int(settings.INVITE_EXPIRE_MINUTES*60),
         invite_code,
     )
+    await r.setex(
+        f"inviter_department_id:{invite_data.email}",
+        int(settings.INVITE_EXPIRE_MINUTES*60),
+        user_department_id,
+    )
+
     return invite_code
