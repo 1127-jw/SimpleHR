@@ -1,10 +1,10 @@
 from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Annotated
+from typing import Annotated, List
 from app.core.db import get_db
 from app.core.redis_client import get_redis
 from app.schemas.user_schema import UserLoginReqSH, UserLoginResSH, RefreshRequest, LogoutRequest, UserInviteSchema, \
-    UserRegisterReqSchema, UserRegisterResSchema
+    UserRegisterReqSchema, UserRegisterResSchema, UserListResponseSchema
 from app.schemas.response_schema import ResponseSchema
 from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user, get_super_user
 from app.service import auth_ser
@@ -77,4 +77,17 @@ async def register(
     return {
         "email": user.email,
         "username": user.username,
+    }
+
+@router.get("/list",summary="获取员工列表",response_model=UserListResponseSchema)
+async def list_users(
+        session: Annotated[AsyncSession, Depends(get_db)],
+        page: int = 1,
+        size: int = 10,
+        user: UserModel = Depends(get_current_user),
+):
+    user_list =await auth_ser.get_list_users(session,user,page,size)
+    return {
+        "total": len(user_list),
+        "items": user_list[(page - 1) * size : page * size],
     }

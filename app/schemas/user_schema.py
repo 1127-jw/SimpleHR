@@ -1,8 +1,7 @@
 from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-
-from app.models import DepartmentModel
+from typing import List
 from app.models.user import UserStatus
 
 #---------JWT---------
@@ -68,3 +67,8 @@ class UserRegisterReqSchema(BaseModel):
 class UserRegisterResSchema(BaseModel):
     email: EmailStr = Field(...,description="Email address")
     username: str = Field(...,description="Username")
+
+class UserListResponseSchema(BaseModel):
+    total: int
+    items: List[UserSH]
+    

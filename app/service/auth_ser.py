@@ -1,6 +1,6 @@
 from fastapi import HTTPException, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Annotated, Optional
+from typing import Annotated, Optional, List,Sequence
 from app.core.db import get_db
 from app.repository.user_repo import UserRepo
 from app.models.user import UserModel, UserStatus
@@ -57,3 +57,14 @@ async def create_user(
             "department_id": redis_inviter_department_id,
         })
         return user
+
+async def get_list_users(
+        session: AsyncSession,
+        user: UserModel,
+        page: int = 1,
+        size: int = 10,
+) -> Sequence[UserModel]|None:
+    async with session.begin():
+        user_repo = UserRepo(session)
+        user_list = await user_repo.get_user_list(page, size, user.department_id)
+        return user_list
