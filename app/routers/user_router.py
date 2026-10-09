@@ -139,7 +139,7 @@ async def dingtalk_authorize(
 
 @router.get("/dingtalk/callback")
 async def dingtalk_callback(
-    session: Annotated[AsyncSession, Depends(get_db)],
+
     state: str,
     code: str | None = None,
     authCode: str | None = None,
@@ -154,6 +154,14 @@ async def dingtalk_callback(
     if not state:
         raise HTTPException(status_code=400, detail="缺少 state 参数")
 
-    list = await dingtalk_ser.call_dingtalk_service(r,state,code)
+    re_cache_key = f"dingtalk:user_retoken:{state}"
+    retoken = await r.get(re_cache_key)
+    if retoken is None:
+        print("无retoken")
+        actoken_state = await dingtalk_ser.call_dingtalk_service(r,state,code)
+    else:
+        print("retoken",retoken)
+        actoken_state = await dingtalk_ser.refresh_user_access_token(r, state, retoken)
+    user_info = await dingtalk_ser.get_dingtalk_user(actoken_state.get("access_token"))
 
-    return ResponseSchema()
+    return user_info
