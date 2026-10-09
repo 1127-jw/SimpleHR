@@ -85,8 +85,14 @@ class Settings(BaseSettings):
     MAIL_STARTTLS: bool = False
     MAIL_SSL_TLS: bool = True
 
+    # ---------- 邀请码 ----------
     INVITE_EXPIRE_MINUTES: int = 30
 
+    # ---------- 钉钉 ----------
+    DINGTALK_CLIENT_ID:str = ""
+    DINGTALK_CLIENT_SECRET:str = ""
+    #内网穿刺
+    BACKEND_BASE_URL: str =""
 
     @computed_field
     @property
@@ -97,8 +103,6 @@ class Settings(BaseSettings):
     @property
     def REDIS_URL(self) -> str:
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
-
-
 
 
 

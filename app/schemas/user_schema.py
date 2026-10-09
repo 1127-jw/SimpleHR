@@ -75,3 +75,6 @@ class UserListResponseSchema(BaseModel):
 class UserStatusUpdateSchema(BaseModel):
     email: EmailStr = Field(..., description="Email address")
     status: UserStatus = Field(..., description="new status")
+
+class DepartmentListRespSchema(BaseModel):
+    departments: List[DepartmentSH]

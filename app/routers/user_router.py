@@ -1,17 +1,26 @@
 from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated, List
+from urllib.parse import urlencode, urljoin
+from redis.asyncio import Redis
+
 from app.core.db import get_db
 from app.core.redis_client import get_redis
 from app.schemas.user_schema import UserLoginReqSH, UserLoginResSH, RefreshRequest, LogoutRequest, UserInviteSchema, \
-    UserRegisterReqSchema, UserRegisterResSchema, UserListResponseSchema, UserStatusUpdateSchema
+    UserRegisterReqSchema, UserRegisterResSchema, UserListResponseSchema, UserStatusUpdateSchema, \
+    DepartmentListRespSchema
 from app.schemas.response_schema import ResponseSchema
 from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user, get_super_user
 from app.service import auth_ser
-from redis.asyncio import Redis
 from app.models.user import UserModel
 from app.service.email_ser import get_invite_code
 from app.tasks.email_tasks import send_invite_email_task
+from app.repository.user_repo import DepartmentRepo
+from app.core.config import get_settings
+from app.service import dingtalk_ser
+
+settings = get_settings()
+
 
 router = APIRouter(prefix="/user", tags=["user"])
 
@@ -99,4 +108,52 @@ async def update_status(
     _: UserModel = Depends(get_super_user),
 ):
     await  auth_ser.update_user_status(session,status_data)
+    return ResponseSchema()
+
+@router.get("/department/list", summary="获取所有部门列表", response_model=DepartmentListRespSchema)
+async def department_list(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: str = Depends(get_current_user),
+):
+    async with session.begin():
+        department_repo = DepartmentRepo(session)
+        departments = await department_repo.get_department_list()
+        return {"departments": departments}
+
+@router.get("/dingtalk/authorize", summary="获取登录钉钉的URL")
+async def dingtalk_authorize(
+    current_user: UserModel = Depends(get_current_user),
+):
+    # redirect_uri：必须是公网能够访问的url
+    redirect_uri = urljoin(settings.BACKEND_BASE_URL, "/user/dingtalk/callback")
+    params = {
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "client_id": settings.DINGTALK_CLIENT_ID,
+        "scope": "openid",
+        "state": current_user.id,
+        "prompt": "consent"
+    }
+    authorize_url = f"https://login.dingtalk.com/oauth2/auth?{urlencode(params)}"
+    return {"authorize_url": authorize_url}
+
+@router.get("/dingtalk/callback")
+async def dingtalk_callback(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    state: str,
+    code: str | None = None,
+    authCode: str | None = None,
+    error: str | None = None,
+    r: Redis = Depends(get_redis),
+
+):
+    if error:
+        raise HTTPException(status_code=400, detail=f"钉钉授权失败: {error}")
+    if not code:
+        raise HTTPException(status_code=400, detail="缺少钉钉授权码")
+    if not state:
+        raise HTTPException(status_code=400, detail="缺少 state 参数")
+
+    list = await dingtalk_ser.call_dingtalk_service(r,state,code)
+
     return ResponseSchema()

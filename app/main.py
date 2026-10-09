@@ -53,3 +53,7 @@ app.add_middleware(
 )
 
 app.include_router(user_router)
+
+@app.get("/")
+async def root():
+    return {"message": "Hello World"}
