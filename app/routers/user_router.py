@@ -1,4 +1,8 @@
 from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks
+from fastapi.responses import RedirectResponse
+from fastapi.templating import Jinja2Templates
+from fastapi import Request
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated, List
 from urllib.parse import urlencode, urljoin
@@ -21,7 +25,7 @@ from app.service import dingtalk_ser
 
 settings = get_settings()
 
-
+jinja2Engine = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/user", tags=["user"])
 
 @router.post("/token",summary="登录",response_model=UserLoginResSH)
@@ -139,7 +143,7 @@ async def dingtalk_authorize(
 
 @router.get("/dingtalk/callback")
 async def dingtalk_callback(
-
+    session: Annotated[AsyncSession, Depends(get_db)],
     state: str,
     code: str | None = None,
     authCode: str | None = None,
@@ -162,6 +166,17 @@ async def dingtalk_callback(
     else:
         print("retoken",retoken)
         actoken_state = await dingtalk_ser.refresh_user_access_token(r, state, retoken)
-    user_info = await dingtalk_ser.get_dingtalk_user(actoken_state.get("access_token"))
+    redirecot_url = await dingtalk_ser.get_dingtalk_user(session,state,actoken_state.get("access_token"))
 
-    return user_info
+    return RedirectResponse(redirecot_url)
+
+@router.get("/dingtalk/authorize/success")
+async def dingtalk_authorize_success(
+    nick: str,
+    request: Request,
+):
+    return jinja2Engine.TemplateResponse(
+        request,
+        "ding_authorize_success.html",
+        {"username": nick}
+    )

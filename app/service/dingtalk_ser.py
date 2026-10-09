@@ -11,11 +11,16 @@ from alibabacloud_dingtalk.oauth2_1_0.client import Client as dingtalkoauth2_1_0
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_dingtalk.oauth2_1_0 import models as dingtalkoauth_2__1__0_models
 
+
 from redis.asyncio import Redis
+from app.repository.user_repo import UserRepo
 from app.core.config import get_settings
 
-
 settings = get_settings()
+
+import httpx
+
+DINGTALK_BASE = "https://api.dingtalk.com"
 
 _dingtalk_oauth_client: dingtalkoauth2_1_0Client | None = None
 
@@ -70,23 +75,6 @@ async def call_dingtalk_service(
         "state": state,
     }
 
-
-
-import httpx
-
-DINGTALK_BASE = "https://api.dingtalk.com"
-
-async def get_dingtalk_user(access_token: str, union_id: str="me"):
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{DINGTALK_BASE}/v1.0/contact/users/{union_id}",
-            headers={
-                "x-acs-dingtalk-access-token": access_token,
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()
-
 async def refresh_user_access_token(
         r: Redis,
         state: str,
@@ -120,4 +108,38 @@ async def refresh_user_access_token(
         "access_token": access_token,
         "state": state,
     }
+
+
+
+async def get_dingtalk_user(session,state,access_token: str, union_id: str="me"):
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{DINGTALK_BASE}/v1.0/contact/users/{union_id}",
+            headers={
+                "x-acs-dingtalk-access-token": access_token,
+            },
+        )
+        resp.raise_for_status()
+        resp = resp.json()
+        nick = resp["nick"]
+        mobile = resp["mobile"]
+        open_id = resp["openId"]
+        union_id = resp["unionId"]
+
+        async with session.begin():
+            # 2.1 get user 检查邮箱是否已经被注册
+            user_repo = UserRepo(session)
+            await user_repo.set_dingding_user(
+                user_id=state,
+                dingding_user_data={
+                    "nick": nick,
+                    "mobile": mobile,
+                    "open_id": open_id,
+                    "union_id": union_id,
+                }
+            )
+
+        return f"/user/dingtalk/authorize/success?nick={nick}"
+
+
 
