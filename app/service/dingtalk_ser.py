@@ -1,12 +1,5 @@
 from fastapi import HTTPException
-from typing import List
 
-import asyncio
-from functools import partial
-
-from alibabacloud_dingtalk.contact_1_0 import models as dingtalkcontact__1__0_models
-from alibabacloud_tea_util import models as util_models
-from alibabacloud_tea_util.client import Client as UtilClient
 from alibabacloud_dingtalk.oauth2_1_0.client import Client as dingtalkoauth2_1_0Client
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_dingtalk.oauth2_1_0 import models as dingtalkoauth_2__1__0_models

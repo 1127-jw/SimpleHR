@@ -50,6 +50,26 @@ class UserRepo(BaseRepo):
             self.session.add(dingding_user)
         return dingding_user
 
+    async def get_dingding_user(self, user_id: str) -> DingdingUserModel | None:
+        stmt = select(DingdingUserModel).where(DingdingUserModel.user_id==user_id)
+        dingding_user = await self.session.scalar(stmt)
+        return dingding_user
+
+    async def assign_department(self, hr_id: str, department_ids: List[str]):
+        hr_stmt = select(UserModel).where(UserModel.id==hr_id).options(selectinload(UserModel.managed_departments))
+        hr: UserModel = await self.session.scalar(hr_stmt)
+        if not hr:
+            raise ValueError("该用户不存在！")
+        department_stmt = select(DepartmentModel).where(DepartmentModel.id.in_(department_ids))
+        result = await self.session.execute(department_stmt)
+        departments = result.scalars().all()
+        hr.managed_departments = departments
+
+    async def get_hr_list(self):
+        stmt = select(UserModel).where(UserModel.is_hr == True).options(selectinload(UserModel.managed_departments))
+        hrs = await self.session.scalars(stmt)
+        return hrs.all()
+
 class DepartmentRepo(BaseRepo):
     async def create_department(self, department_data: dict) -> DepartmentModel:
         department = DepartmentModel(**department_data)

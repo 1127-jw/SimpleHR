@@ -72,7 +72,7 @@ class CandidateModel(BaseModel):
     creator: Mapped["UserModel"] = relationship(lazy="joined")
     ai_score: Mapped["CandidateAIScoreModel"] = relationship(back_populates="candidate", uselist=False)
 
-
+#候选人AI评分
 class CandidateAIScoreModel(BaseModel):
     __tablename__ = "candidate_ai_scores"
 
@@ -90,7 +90,7 @@ class CandidateAIScoreModel(BaseModel):
 
     candidate: Mapped["CandidateModel"] = relationship(back_populates="ai_score")
 
-
+#简历
 class ResumeModel(BaseModel):
     __tablename__ = "resumes"
 

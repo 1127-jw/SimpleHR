@@ -45,6 +45,17 @@ AsyncSessionFactory = async_sessionmaker(
 )
 
 
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionFactory() as session:
+        try:
+            yield session
+            # await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
+
 # 创建 Declarative Base
 # 定义命名约定的Base类
 class Base(DeclarativeBase):
@@ -71,14 +82,3 @@ class BaseModel(Base):
         default=datetime.now,
         onupdate=datetime.now
     )
-
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionFactory() as session:
-        try:
-            yield session
-            # await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            await session.close()

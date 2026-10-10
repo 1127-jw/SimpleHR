@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.routers.user_router import router as user_router
+from app.routers.position_router import router as position_router
 from contextlib import asynccontextmanager
 from app.core.redis_client import init_redis, close_redis
 
@@ -53,6 +54,8 @@ app.add_middleware(
 )
 
 app.include_router(user_router)
+app.include_router(position_router)
+
 
 @app.get("/")
 async def root():

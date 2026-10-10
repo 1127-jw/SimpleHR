@@ -12,7 +12,7 @@ from app.core.db import get_db
 from app.core.redis_client import get_redis
 from app.schemas.user_schema import UserLoginReqSH, UserLoginResSH, RefreshRequest, LogoutRequest, UserInviteSchema, \
     UserRegisterReqSchema, UserRegisterResSchema, UserListResponseSchema, UserStatusUpdateSchema, \
-    DepartmentListRespSchema
+    DepartmentListRespSchema, DingdingUserRespSchema, AssignDepartmentSchema, HrListRespSchema
 from app.schemas.response_schema import ResponseSchema
 from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user, get_super_user
 from app.service import auth_ser
@@ -22,6 +22,7 @@ from app.tasks.email_tasks import send_invite_email_task
 from app.repository.user_repo import DepartmentRepo
 from app.core.config import get_settings
 from app.service import dingtalk_ser
+from app.repository.user_repo import UserRepo
 
 settings = get_settings()
 
@@ -180,3 +181,38 @@ async def dingtalk_authorize_success(
         "ding_authorize_success.html",
         {"username": nick}
     )
+
+@router.get("/dingtalk/account", summary="获取自己的钉钉账号", response_model=DingdingUserRespSchema)
+async def dingtalk_account(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    current_user: UserModel = Depends(get_current_user),
+):
+    async with session.begin():
+        user_repo = UserRepo(session)
+        dingding_user = await user_repo.get_dingding_user(current_user.id)
+    return {"dingding_user": dingding_user}
+
+
+@router.post("/assign/department", summary="分配部门给指定的HR", response_model=ResponseSchema)
+async def assign_department(
+    assign_data: AssignDepartmentSchema,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: UserModel = Depends(get_super_user),
+):
+    async with session.begin():
+        user_repo = UserRepo(session)
+        try:
+            await user_repo.assign_department(hr_id=assign_data.hr_id, department_ids=assign_data.department_ids)
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        return ResponseSchema()
+
+@router.get("/hr/list", summary="获取HR列表", response_model=HrListRespSchema)
+async def get_hr_list(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: UserModel = Depends(get_super_user),
+):
+    async with session.begin():
+        user_repo = UserRepo(session)
+        hrs = await user_repo.get_hr_list()
+        return {"hrs": hrs}

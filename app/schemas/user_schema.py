@@ -78,3 +78,26 @@ class UserStatusUpdateSchema(BaseModel):
 
 class DepartmentListRespSchema(BaseModel):
     departments: List[DepartmentSH]
+
+class DingdingUserSchema(BaseModel):
+    id: str = Field(..., description="钉钉账号在自己服务器上的id")
+    nick: str = Field(..., description="在钉钉上的nickname")
+    union_id: str = Field(..., description="在钉钉上的union_id")
+    open_id: str = Field(..., description="在钉钉上的open_id")
+    mobile: str = Field(..., description="在钉钉上的手机号")
+    user_id: str = Field(..., description="在钉钉上的用户表的外键")
+
+    model_config = ConfigDict(from_attributes=True)
+
+class DingdingUserRespSchema(BaseModel):
+    dingding_user: DingdingUserSchema | None
+
+class AssignDepartmentSchema(BaseModel):
+    hr_id: str = Field(..., description="HR的id")
+    department_ids: List[str] = Field(..., description="HR负责的部门的ID列表")
+
+class HrSchema(UserSH):
+    managed_departments: List[DepartmentSH]
+
+class HrListRespSchema(BaseModel):
+    hrs: List[HrSchema]
