@@ -98,6 +98,7 @@ class MailBot:
         await self._ensure_connected()
 
         last_uid = self._state.last_uid
+        logger.info("poll start: last_uid={}", last_uid)
         if last_uid is None:
             # 冷启动：把游标定到当前最大 UID，只处理"从现在起"的新邮件。
             # 若想补处理历史未读，把这里改成 fetch 条件 "UNSEEN"。
@@ -105,7 +106,8 @@ class MailBot:
             logger.info("cold start, baseline last_uid={}", self._state.last_uid)
             return []
 
-        uids = await self._imap.search_uids(f"UID {last_uid + 1}:*")
+        uids = await self._imap.search_uids(f"UID {last_uid + 1}:*", min_uid=last_uid)
+        logger.info("poll search: last_uid={}, found {} uid(s) {}", last_uid, len(uids), uids)
         if not uids:
             return []
 
@@ -149,24 +151,42 @@ class MailBot:
                             attachment_names=[a.filename for a in attachments]):
                 matched = rule
                 break
+
+        # 4) 无论规则是否匹配，只要处理过就标记已读（IMAP \Seen + state 去重）
+        #    这样不会重复处理同一封邮件，也不会在邮箱里一直显示未读
+        await self._mark_email_seen(email)
+
         if matched is None:
             return
 
         logger.info("rule [{}] hit: uid={} from={} subject={}",
                     matched.name, email.uid, email.sender, email.subject)
 
-        # 4) 去重后回复（Message-ID 判重，防游标回退导致的二次回复）
+        # 5) 去重后回复（Message-ID 判重，防游标回退导致的二次回复）
         if self.settings.auto_reply and matched.reply_text \
                 and not self._state.is_seen(email.message_id):
             await self.reply(email, text=matched.reply_text)
         self._state.mark_seen(email.message_id)
 
-        # 5) 通知业务方（提醒逻辑）
+        # 6) 通知业务方（提醒逻辑）
         if self.on_match:
             try:
                 await self.on_match(email, matched)
             except Exception:
                 logger.exception("on_match hook failed")
+
+    async def _mark_email_seen(self, email: ParsedEmail) -> None:
+        """把一封邮件标记为已读：IMAP \\Seen 标志 + state 去重。"""
+        # state 去重（防同 UID 回退导致的重复处理）
+        logger.debug("mark_seen uid={} message_id={} is_seen={}",
+                     email.uid, email.message_id, self._state.is_seen(email.message_id))
+        self._state.mark_seen(email.message_id)
+        # IMAP \Seen 标志（让邮箱里不再显示为未读）
+        if email.uid:
+            try:
+                await self._imap.mark_seen(str(email.uid))
+            except Exception:
+                logger.exception("mark_seen uid={} failed", email.uid)
 
     async def fetch_latest(self, limit: int | None = None) -> list[ParsedEmail]:
         await self._ensure_connected()
@@ -226,7 +246,3 @@ class MailBot:
         msg.set_content(text)
         await self._smtp.send_message(msg)
         logger.info("replied uid={} to={}", email.uid, reply_to)
-
-        # 标记已读放后台（有引用保护），不阻塞轮询节奏
-        if email.uid:
-            self._spawn(self._imap.mark_seen(str(email.uid)))

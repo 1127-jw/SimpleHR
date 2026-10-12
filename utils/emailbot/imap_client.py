@@ -149,18 +149,24 @@ class ImapClient:
             await asyncio.to_thread(conn.select, mailbox)
             self._mailbox = mailbox
 
-    async def search_uids(self, criteria: str) -> list[str]:
-        """按条件搜 UID。criteria 例："ALL" / "UNSEEN" / f"UID {n}:*" """
+    async def search_uids(self, criteria: str, *, min_uid: int = 0) -> list[str]:
+        """按条件搜 UID。criteria 例："ALL" / "UNSEEN" / f"UID {n}:*"
+
+        min_uid > 0 时会在客户端侧额外过滤掉 UID <= min_uid 的结果，
+        用于规避部分 IMAP 服务器（如 QQ 邮箱）UID 范围搜索返回错误结果的问题。
+        """
         def _search():
-            # uid() 是 imaplib 对 IMAP4 UID 命令的封装，参数顺序：
-            #   uid("SEARCH", <charset，可传 None>, <搜索条件字符串>)
-            # 返回 (类型, [空格分隔的 UID 字节串])
-            typ, data = self._conn.uid("SEARCH", None, criteria)
+            typ, data = self._conn.uid("SEARCH", criteria)
+            logger.debug("IMAP SEARCH cmd=UID SEARCH {} → typ={}, data={}", criteria, typ, data)
             if typ != "OK":
                 raise RuntimeError(f"IMAP SEARCH failed: {typ} {data}")
             # 空邮箱或没匹配时 data[0] 是 b""，所以要 `or b""` 兜底再 split
             raw = data[0] or b""
-            return [x.decode() if isinstance(x, bytes) else str(x) for x in raw.split() if x]
+            uids = [x.decode() if isinstance(x, bytes) else str(x) for x in raw.split() if x]
+            # 客户端侧过滤：部分服务器（QQ 邮箱）UID 范围搜索可能返回不符合范围的结果
+            if min_uid > 0:
+                uids = [u for u in uids if u.isdigit() and int(u) > min_uid]
+            return uids
 
         async with self._lock:
             self._require_conn()

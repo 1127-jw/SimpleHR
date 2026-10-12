@@ -1,4 +1,3 @@
-
 from fastapi import Depends, APIRouter, HTTPException,Query,status
 # 类型注释
 from typing import Annotated, List
@@ -25,7 +24,7 @@ router = APIRouter(prefix="/position", tags=["position"])
 async def create_position(
     session:Annotated[AsyncSession, Depends(get_db)],
     position_data: PositionCreateSchema,
-    current_user: UserModel = Depends(get_current_user),
+    current_user:Annotated[UserModel,Depends(get_current_user)],
 
 ):
     position = await position_ser.create_position(session, position_data, current_user)
@@ -50,18 +49,8 @@ async def delete_position(
     session:Annotated[AsyncSession, Depends(get_db)],
     current_user:Annotated[UserModel,Depends(get_current_user)],
 ):
-    async with session.begin():
-        position_repo = PositionRepo(session=session)
-        position = await position_repo.get_by_id(position_id)
-        if not position:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该职位不存在！")
-        # 如果是superuser，那么可以直接删除；否则就只能是所属部门的人才能删除
-        if (not current_user.is_superuser) and (position.department_id != current_user.department.id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="没有权限执行操作！")
-
-        # 执行删除操作
-        try:
-            await position_repo.delete_position(position_id)
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="职位删除失败！")
-        return ResponseSchema()
+    try:
+        await position_ser.delete_position(session,position_id,current_user)
+    except Exception:
+        raise
+    return ResponseSchema()

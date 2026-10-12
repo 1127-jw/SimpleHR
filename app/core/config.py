@@ -20,7 +20,7 @@
 * ``TORTOISE_ORM`` 仍以「模块级常量」导出：Aerich 与 SAQ worker 需要一个能用
   字符串引用的配置对象（``app.core.config.TORTOISE_ORM``）。
 """
-
+import os
 from pathlib import Path
 from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     DINGTALK_CLIENT_SECRET:str = ""
     #内网穿刺
     BACKEND_BASE_URL: str =""
+
+    # ---------- 文件上传 ----------
+    RESUME_DIR:str = os.path.join(BASE_DIR, "upload")
+
+    PADDLE_OCR_ACCESS_TOKEN:str=""
+
 
     @computed_field
     @property
