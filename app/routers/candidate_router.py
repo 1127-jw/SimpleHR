@@ -1,28 +1,20 @@
-import os
-
-import aiofiles
-import logger
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks
 from typing import Annotated, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
-from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user, get_super_user
+from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.models.user import UserModel
 from uuid import uuid4
-from pathlib import Path
 
-from app.repository.resume_repo import ResumeRepo, CandidateRepo
+
+
 from app.schemas.candidate_schema import ResumeUploadRespSchema, ResumePaseSchema, ResumeParseTaskRespSchema, \
-    TaskInfoSchema, CandidateCreateSchema, CandidateSchema
+    TaskInfoSchema
 from app.service.candidate_ser import resume_upload_service, parse_resume_service
-from app.tasks.ocr_tasks import ocr_parse_resume_task
+
 from redis.asyncio import Redis
 from app.core.redis_client import get_redis
-from app.schemas.response_schema import ResponseSchema
-from schemas.position_schema import PositionSchema
-from schemas.user_schema import UserSH
-from utils.PDFser import WordToPdfConverter
 
 settings = get_settings()
 

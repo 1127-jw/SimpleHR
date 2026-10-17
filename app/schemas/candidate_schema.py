@@ -91,8 +91,9 @@ class CandidateAIScoreRespSchema(BaseModel):
     ai_score: CandidateAIScoreSchema
 
 
+from app.schemas.agent_schema import AgentCandidateSchema
 class TaskInfoSchema(BaseModel):
     task_id: str
     status: Literal['pending', 'done', 'failed']
-    result: dict[str, str] | None = None
+    result: AgentCandidateSchema | None = None
     error: str | None = None

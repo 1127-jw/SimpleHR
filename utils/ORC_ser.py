@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from typing import List
 
 from app.core.config import get_settings
@@ -103,6 +104,19 @@ class PaddleOcr:
             if jsonl_response.status_code != 200:
                 raise ValueError(f"获取内容失败：{jsonl_response.text}")
             lines = jsonl_response.text.strip().split('\n')
+
+            pattern = r'"block_label"\s*:\s*"doc_title"[^}]*"block_content"\s*:\s*"([^"]*)"'
+            match = re.search(pattern, jsonl_response.text)
+            if match:
+                doc_title = match.group(1)
+
+            doc_title = self._extract_block(jsonl_response.text, "doc_title")
+            footer = self._extract_block(jsonl_response.text, "footer")
+            logger.debug(f"doc_title:{doc_title}")
+            logger.debug(f"footer:{footer}")
+
+            contents.extend(doc_title)
+
             for line in lines:
                 line = line.strip()
                 if not line:
@@ -110,4 +124,13 @@ class PaddleOcr:
                 result = json.loads(line)["result"]
                 for res in result["layoutParsingResults"]:
                     contents.append(res["markdown"]["text"])
+
+            contents.extend(footer)
+
         return contents
+
+    @staticmethod
+    def _extract_block(text: str, label: str) ->  List[str]:
+        """从 OCR JSONL 文本中提取指定 block_label 的 block_content"""
+        pattern = rf'"block_label"\s*:\s*"{re.escape(label)}"[^}}]*"block_content"\s*:\s*"([^"]*)"'
+        return re.findall(pattern, text)

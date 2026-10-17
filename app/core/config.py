@@ -99,6 +99,8 @@ class Settings(BaseSettings):
 
     PADDLE_OCR_ACCESS_TOKEN:str=""
 
+    DASHSCOPE_API_KEY:str=""
+
 
     @computed_field
     @property
