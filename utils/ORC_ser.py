@@ -98,6 +98,7 @@ class PaddleOcr:
             await asyncio.sleep(2)
 
     async def fetch_parsed_contents(self, jsonl_url: str) -> List[str]:
+        logger.debug(f"jsonl_url:{jsonl_url}")
         contents = []
         async with httpx.AsyncClient() as client:
             jsonl_response = await client.get(jsonl_url)
@@ -105,17 +106,12 @@ class PaddleOcr:
                 raise ValueError(f"获取内容失败：{jsonl_response.text}")
             lines = jsonl_response.text.strip().split('\n')
 
-            pattern = r'"block_label"\s*:\s*"doc_title"[^}]*"block_content"\s*:\s*"([^"]*)"'
-            match = re.search(pattern, jsonl_response.text)
-            if match:
-                doc_title = match.group(1)
-
-            doc_title = self._extract_block(jsonl_response.text, "doc_title")
+            header = self._extract_block(jsonl_response.text, "header")
             footer = self._extract_block(jsonl_response.text, "footer")
-            logger.debug(f"doc_title:{doc_title}")
+            logger.debug(f"doc_title:{header}")
             logger.debug(f"footer:{footer}")
 
-            contents.extend(doc_title)
+            contents.extend(header)
 
             for line in lines:
                 line = line.strip()
