@@ -3,7 +3,7 @@ from app.schemas.user_schema import UserSH
 # from core.cache import TaskInfoSchema
 from app.models.candidate import GenderEnum, CandidateStatusEnum
 from app.schemas.position_schema import PositionSchema
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
 
 
@@ -89,3 +89,10 @@ class CandidateAIScoreSchema(BaseModel):
 
 class CandidateAIScoreRespSchema(BaseModel):
     ai_score: CandidateAIScoreSchema
+
+
+class TaskInfoSchema(BaseModel):
+    task_id: str
+    status: Literal['pending', 'done', 'failed']
+    result: dict[str, str] | None = None
+    error: str | None = None

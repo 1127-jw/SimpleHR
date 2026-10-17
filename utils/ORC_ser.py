@@ -7,9 +7,8 @@ from app.core.config import get_settings
 import httpx
 import asyncio
 from loguru import logger
+from langchain_openai import ChatOpenAI
 
-
-from utils.PDFser import PDF2ImageConverter
 settings = get_settings()
 
 
@@ -17,7 +16,7 @@ class PaddleOcr:
     def __init__(self):
         self.job_url = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
         self.access_token = settings.PADDLE_OCR_ACCESS_TOKEN
-        self.model_name = "PaddleOCR-VL-1.5"
+        self.model_name = "PaddleOCR-VL-1.6"
         self.headers = {
             "Authorization": f"bearer {self.access_token}",
         }
@@ -28,6 +27,11 @@ class PaddleOcr:
         }
 
     async def create_job(self, file: str) -> str:
+        """
+        创建解析任务：上传要解析的文件地址 url或者本地文件位置
+        :param file: 文件地址
+        :return: 解析任务id
+        """
         if file.startswith("http"):
             self.headers["Content-Type"] = "application/json"
             payload = {
@@ -58,6 +62,11 @@ class PaddleOcr:
         return job_id
 
     async def poll_for_state(self, job_id: str) -> str | None:
+        """
+        轮询任务状态
+        :param job_id: 解析任务id
+        :return: 返回解析文件内容地址
+        """
         while True:
             async with httpx.AsyncClient() as client:
                 url = f"{self.job_url}/{job_id}"

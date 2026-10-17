@@ -1,6 +1,6 @@
 from fastapi import HTTPException, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Annotated, Optional, List,Sequence
+from typing import Annotated, Optional, Sequence
 from app.core.db import get_db
 from app.repository.user_repo import UserRepo
 from app.models.user import UserModel, UserStatus

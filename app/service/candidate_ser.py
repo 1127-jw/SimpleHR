@@ -1,14 +1,17 @@
 import os
-from fastapi import HTTPException, UploadFile, status
+from fastapi import HTTPException, UploadFile, status,BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 from pathlib import Path
 from app.repository.resume_repo import ResumeRepo
 from app.models.user import UserModel
+from app.models.candidate import ResumeModel
+from app.schemas.candidate_schema import TaskInfoSchema
+from app.tasks.ocr_tasks import ocr_parse_resume_task
 from utils.PDFser import WordToPdfConverter
 import aiofiles
-import logger
-
+from loguru import logger
+from redis.asyncio import Redis
 from app.core.config import get_settings
 settings = get_settings()
 async def resume_upload_service(
@@ -41,8 +44,10 @@ async def resume_upload_service(
             while content:
                 await fp.write(content)
                 content = await file.read(1024)
-    finally:
-        await fp.close()
+
+    except Exception as e:
+        logger.error(f"文件写入失败: {e}")
+
 
     # 3. 如果是word文档，那么就转化成pdf
     if file_extension == ".doc" or file_extension == ".docx":
@@ -63,3 +68,23 @@ async def resume_upload_service(
         # 在数据库中只保存文件名
         file_name = Path(file_path).name
         resume = await resume_repo.create_resume(file_path=file_name, uploader_id=current_user.id)
+        return resume
+
+
+async def parse_resume_service(
+        session: AsyncSession,
+        r:Redis,
+        resume_id:str,
+        task_id:str,
+        background_tasks:BackgroundTasks
+):
+
+    async with session.begin():
+        resume_repo = ResumeRepo(session=session)
+        resume: ResumeModel = await resume_repo.get_by_id(resume_id)
+    file_path = os.path.join(settings.RESUME_DIR, resume.file_path)
+    key = f"task:{task_id}"
+    task_info = TaskInfoSchema(task_id=task_id, status='pending')
+    await r.set(key, task_info.model_dump_json(), ex=60*60)
+    background_tasks.add_task(ocr_parse_resume_task,file_path, r, task_id, key)
+
