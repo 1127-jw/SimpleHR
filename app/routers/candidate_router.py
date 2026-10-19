@@ -10,11 +10,12 @@ from uuid import uuid4
 
 
 from app.schemas.candidate_schema import ResumeUploadRespSchema, ResumePaseSchema, ResumeParseTaskRespSchema, \
-    TaskInfoSchema
-from app.service.candidate_ser import resume_upload_service, parse_resume_service
+    TaskInfoSchema,CandidateCreateSchema
+from app.service.candidate_ser import resume_upload_service, parse_resume_service, create_candidate_ser
 
 from redis.asyncio import Redis
 from app.core.redis_client import get_redis
+from app.schemas.response_schema import ResponseSchema
 
 settings = get_settings()
 
@@ -66,4 +67,13 @@ async def get_task_status(
 
     return task_info
 
+@router.post("/create",summary="创建候选人")
+async def create_candidate(
+    candidate_data:CandidateCreateSchema,
+    session:Annotated[AsyncSession, Depends(get_db)],
+    current_user:Annotated[UserModel,Depends(get_current_user)],
+):
+    candidate = await create_candidate_ser(session,current_user,candidate_data)
+
+    return ResponseSchema()
 

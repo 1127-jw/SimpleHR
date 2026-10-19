@@ -1,3 +1,4 @@
+from typing import cast
 from datetime import datetime
 
 from app.models.position import PositionModel
@@ -18,7 +19,11 @@ class ResumeRepo(BaseRepo):
         return resume
 
     async def get_by_id(self, resume_id: str) -> ResumeModel:
-        return await self.session.scalar(select(ResumeModel).where(ResumeModel.id == resume_id))
+        stmt = select(ResumeModel).where(ResumeModel.id == resume_id)
+        resume = await self.session.scalar(stmt)
+        if resume is None:
+            raise ValueError(f"Resume not found: {resume_id}")
+        return cast(ResumeModel, resume)
 
 
 class CandidateRepo(BaseRepo):

@@ -1,19 +1,24 @@
 import os
 from fastapi import HTTPException, UploadFile, status,BackgroundTasks
+from openai.types.beta.realtime.response_create_event import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 from pathlib import Path
-from app.repository.resume_repo import ResumeRepo
+from app.repository.resume_repo import ResumeRepo, CandidateRepo
 from app.models.user import UserModel
 from app.models.candidate import ResumeModel
-from app.schemas.candidate_schema import TaskInfoSchema
+from app.schemas.candidate_schema import TaskInfoSchema, CandidateCreateSchema
 from app.tasks.ocr_tasks import ocr_parse_resume_task
+from app.schemas.response_schema import ResponseSchema
 from utils.PDFser import WordToPdfConverter
 import aiofiles
 from loguru import logger
 from redis.asyncio import Redis
 from app.core.config import get_settings
+
 settings = get_settings()
+
+
 async def resume_upload_service(
         session: AsyncSession,
         file:UploadFile,
@@ -88,3 +93,16 @@ async def parse_resume_service(
     await r.set(key, task_info.model_dump_json(), ex=60*60)
     background_tasks.add_task(ocr_parse_resume_task,file_path, r, task_id, key)
 
+
+async def create_candidate_ser(
+        session: AsyncSession,
+        current_user:UserModel,
+        candidate_data:CandidateCreateSchema
+):
+    async with session.begin():
+        candidate_dict = candidate_data.model_dump()
+        candidate_dict['creator_id'] = current_user.id
+        candidate_repo = CandidateRepo(session=session)
+        candidate = await candidate_repo.create_candidate(candidate_dict)
+
+    return candidate
