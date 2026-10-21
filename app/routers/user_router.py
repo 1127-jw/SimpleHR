@@ -162,10 +162,10 @@ async def dingtalk_callback(
     re_cache_key = f"dingtalk:user_retoken:{state}"
     retoken = await r.get(re_cache_key)
     if retoken is None:
-        print("无retoken")
+        # print("无retoken")
         actoken_state = await dingtalk_ser.call_dingtalk_service(r,state,code)
     else:
-        print("retoken",retoken)
+        # print("retoken",retoken)
         actoken_state = await dingtalk_ser.refresh_user_access_token(r, state, retoken)
     redirecot_url = await dingtalk_ser.get_dingtalk_user(session,state,actoken_state.get("access_token"))
 

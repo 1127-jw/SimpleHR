@@ -5,7 +5,7 @@ from langchain_core.messages import BaseMessage
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph.message import add_messages
 from langchain_core.prompts import PromptTemplate
-from typing import Annotated, List, TypedDict, TypeVar, Optional, NotRequired, cast
+from typing import Annotated, List, TypedDict, TypeVar, Optional, NotRequired, cast, Any
 
 from langgraph.prebuilt import ToolRuntime
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,8 +20,18 @@ from app.schemas.user_schema import UserSH
 from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
 from app.repository.resume_repo import CandidateAIScoreRepo, CandidateRepo
-from models.candidate import CandidateStatusEnum
+from app.models import DingdingUserModel
+from app.models.candidate import CandidateStatusEnum
+from app.core.redis_client import get_redis
+from app.repository.user_repo import UserRepo
+from app.service.dingtalk_ser import get_user_access_token, get_calendar_list
 
+from loguru import logger
+from datetime import datetime, timedelta
+import json
+
+from utils.time_ISO8601_datatime import iso8601_to_datetime_beijing
+from utils.available_time import find_available_slot
 settings = get_settings()
 
 T = TypeVar("T")
@@ -89,7 +99,64 @@ async def score_for_candidate(
                 return f"ai评分写入db失败，错误信息为{e}"
     return f"ai评分工具执行成功，该候选人的评分为{candidate_score.model_dump_json()}"
 
-class CandidateProcessAgent():
+
+@tool
+async def get_interviewer_available_slot(
+        runtime:ToolRuntime[CandidateAgentState],
+):
+    """
+       根据职位信息，获取面试官可用的面试时间。
+       """
+    interviewer: UserSH = runtime.state['interviewer']
+    # 获取该用户的钉钉账号
+    union_id: str|None = None
+    async with AsyncSessionFactory() as session:
+        async with session.begin():
+            try:
+                user_repo = UserRepo(session)
+                dingding_user: DingdingUserModel | None = await user_repo.get_dingding_user(user_id=interviewer.id)
+                if not dingding_user:
+                    return f"获取候选人可用时间失败，没有绑定钉钉账号！"
+                union_id = dingding_user.union_id
+            except Exception as e:
+                return f"获取候选人可用时间失败：{e}"
+    try:
+        # 2. 获取access_token
+        r = await get_redis()
+        access_token_info = await get_user_access_token(interviewer.id, r)
+    except Exception as e:
+        logger.error(e)
+        return f"获取access_toke败：{e}"
+
+    # 3. 从钉钉上获取面试官的日程安排
+    try:
+        now = datetime.now()
+        tomorrow_nine = datetime(year=now.year, month=now.month, day=now.day, hour=9) + timedelta(days=1)
+        events: list[dict[str, Any]] = await get_calendar_list(
+            union_id=cast(str, union_id),
+            access_token=cast(str, access_token_info.get("access_token")),
+            time_min=tomorrow_nine,
+            time_max=tomorrow_nine + timedelta(days=7),
+        )
+        busy_slots = [
+            (iso8601_to_datetime_beijing(event['start']['dateTime']), iso8601_to_datetime_beijing(event['end']['dateTime']))
+            for event in events
+        ]
+        available_slots: list[tuple[datetime, datetime]] = find_available_slot(
+            busy_slots,
+            start_date=tomorrow_nine
+        )
+        if len(available_slots) == 0:
+            return f"获取面试官可用时间失败：7天内没有空闲时间！"
+        available_times = [(iso8601_to_datetime_beijing(slot[0]), iso8601_to_datetime_beijing(slot[1])) for slot in
+                           available_slots]
+        return f"找到面试官可用的时间：{json.dumps(available_times)}"
+
+    except Exception as e:
+        return f"获取面试官可用时间失败：{e}"
+
+
+class CandidateProcessAgent:
     def __init__(self,
         candidate:CandidateSchema|None,
         position:PositionSchema|None,

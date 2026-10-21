@@ -4,14 +4,19 @@ from alibabacloud_dingtalk.oauth2_1_0.client import Client as dingtalkoauth2_1_0
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_dingtalk.oauth2_1_0 import models as dingtalkoauth_2__1__0_models
 
-
+from datetime import datetime, timezone, timedelta
+from urllib.parse import quote, urljoin
 from redis.asyncio import Redis
+import httpx
+from loguru import logger
+
 from app.repository.user_repo import UserRepo
 from app.core.config import get_settings
+from utils.time_ISO8601_datatime import datetime_to_iso8601_beijing
 
 settings = get_settings()
 
-import httpx
+
 
 DINGTALK_BASE = "https://api.dingtalk.com"
 
@@ -25,15 +30,6 @@ def get_dingtalk_oauth_client() -> dingtalkoauth2_1_0Client:
         config.region_id = "central"
         _dingtalk_oauth_client = dingtalkoauth2_1_0Client(config)
     return _dingtalk_oauth_client
-
-# class DingtalkService():
-#
-#     # dingtalk_api_base_url = "https://oapi.dingtalk.com"
-#     # user_accesstoken_url = "/v1.0/oauth2/userAccessToken"
-#     #
-#     # dingtalk_accesstoken = urljoin(dingtalk_api_base_url, user_accesstoken_url)
-#     pass
-
 
 async def call_dingtalk_service(
         r:Redis,
@@ -67,6 +63,7 @@ async def call_dingtalk_service(
         "access_token": access_token,
         "state": state,
     }
+
 
 async def refresh_user_access_token(
         r: Redis,
@@ -103,6 +100,26 @@ async def refresh_user_access_token(
     }
 
 
+async def get_user_access_token(
+        state: str,
+        r: Redis
+) -> dict:
+    ac_cache_key = f"dingtalk:user_actoken:{state}"
+    re_cache_key = f"dingtalk:user_retoken:{state}"
+    ac_token = await r.get(ac_cache_key)
+    re_token = await r.get(re_cache_key)
+    if not ac_token:
+        try:
+            access_token_info = await refresh_user_access_token(r, state, re_token)
+        except Exception as e:
+            error_message = f"{state}用户钉钉授权已过期,错误代码为{e}"
+            logger.error(error_message)
+            raise HTTPException(status_code=400, detail=error_message)
+        return access_token_info
+    return {
+        "access_token": ac_token,
+        "state": state
+    }
 
 async def get_dingtalk_user(session,state,access_token: str, union_id: str="me"):
     async with httpx.AsyncClient() as client:
@@ -135,4 +152,57 @@ async def get_dingtalk_user(session,state,access_token: str, union_id: str="me")
         return f"/user/dingtalk/authorize/success?nick={nick}"
 
 
+#创建日程日期的查询url
+def build_get_calendar_list_url(union_id: str, time_min: datetime, time_max: datetime):
+    # 将日期转化为ISO-8601的date-time格式
+    time_min_iso8601: str = datetime_to_iso8601_beijing(time_min)
+    time_max_iso8601: str = datetime_to_iso8601_beijing(time_max)
 
+    # 对时间字符串进行 URL 编码，防止 '+' 被识别为空格
+    time_min_encoded = quote(time_min_iso8601)
+    time_max_encoded = quote(time_max_iso8601)
+
+    path = f"/v1.0/calendar/users/{union_id}/calendars/primary/events?timeMin={time_min_encoded}&timeMax={time_max_encoded}"
+    return urljoin(DINGTALK_BASE, path)
+
+#获取日程列表
+async def get_calendar_list(union_id: str, access_token: str, time_min: datetime, time_max: datetime):
+    url = build_get_calendar_list_url(union_id, time_min, time_max)
+    headers = {
+        "x-acs-dingtalk-access-token": access_token
+    }
+    async with httpx.AsyncClient() as client:
+        calendar_resp = await client.get(url,headers=headers)
+        calendar_resp.raise_for_status()
+        calendar_data = calendar_resp.json() or {}
+        events = calendar_data.get("events")
+        return events
+
+
+#创建日程的url
+def build_create_calendar_url(union_id: str):
+    path = f"/v1.0/calendar/users/{union_id}/calendars/primary/events"
+    return urljoin(DINGTALK_BASE, path)
+
+#创建日程
+async def create_calendar(union_id: str, access_token: str, summary: str, start_datetime: datetime, end_datetime: datetime):
+    url = build_create_calendar_url(union_id)
+    headers = {
+        "x-acs-dingtalk-access-token": access_token
+    }
+    data = {
+        "summary": summary,
+        "start": {
+            "dateTime": datetime_to_iso8601_beijing(start_datetime),
+            "timeZone": "Asia/Shanghai",
+        },
+        "end": {
+            "dateTime": datetime_to_iso8601_beijing(end_datetime),
+            "timeZone": "Asia/Shanghai",
+        }
+    }
+    async with httpx.AsyncClient() as client:
+        calendar_response = await client.post(url, json=data, headers=headers)
+        calendar_response.raise_for_status()
+        calendar_data = calendar_response.json() or {}
+        return calendar_data
