@@ -148,8 +148,7 @@ async def get_interviewer_available_slot(
         )
         if len(available_slots) == 0:
             return f"获取面试官可用时间失败：7天内没有空闲时间！"
-        available_times = [(iso8601_to_datetime_beijing(slot[0]), iso8601_to_datetime_beijing(slot[1])) for slot in
-                           available_slots]
+        available_times = [(slot[0], slot[1]) for slot in available_slots]
         return f"找到面试官可用的时间：{json.dumps(available_times)}"
 
     except Exception as e:
