@@ -3,12 +3,10 @@ from langchain.agents import create_agent, AgentState
 from langchain.agents.middleware import ModelFallbackMiddleware, SummarizationMiddleware
 from langchain_core.messages import BaseMessage
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from langgraph.graph.message import add_messages
-from langchain_core.prompts import PromptTemplate
-from typing import Annotated, List, TypedDict, TypeVar, Optional, NotRequired, cast, Any
-
 from langgraph.prebuilt import ToolRuntime
-from sqlalchemy.ext.asyncio import AsyncSession
+from langchain_core.prompts import PromptTemplate
+
+from typing import Annotated, TypeVar, Optional, cast, Any
 
 from app.agents.llms import qwen_llm, deepseek_llm
 from app.agents.prompts import CANDIDATE_PROCESS_SYSTEM_PROMPT, SCORE_FOR_CANDIDATE_SYSTEM_PROMPT, \
@@ -19,22 +17,26 @@ from app.schemas.position_schema import PositionSchema
 from app.schemas.user_schema import UserSH
 from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
-from app.repository.resume_repo import CandidateAIScoreRepo, CandidateRepo
 from app.models import DingdingUserModel
 from app.models.candidate import CandidateStatusEnum
+from app.models.InterviewModel import InterviewResultEnum
 from app.core.redis_client import get_redis
+from app.service.dingtalk_ser import get_user_access_token, get_calendar_list, create_calendar
 from app.repository.user_repo import UserRepo
-from app.service.dingtalk_ser import get_user_access_token, get_calendar_list
+from app.repository.Interview_repo import InterviewRepo
+from app.repository.resume_repo import CandidateAIScoreRepo, CandidateRepo
+
 
 from loguru import logger
 from datetime import datetime, timedelta
 import json
 
+
 from utils.emailbot.mail_manager import get_mail_bot_
 from utils.time_ISO8601_datatime import iso8601_to_datetime_beijing
 from utils.available_time import find_available_slot
-settings = get_settings()
 
+settings = get_settings()
 T = TypeVar("T")
 
 def assign_state_property(left: T, right: Optional[T]) -> T:
@@ -101,23 +103,16 @@ async def score_for_candidate(
     return f"ai评分工具执行成功，该候选人的评分为{candidate_score.model_dump_json()}"
 
 
-@tool
-async def get_interviewer_available_slot(
-        runtime:ToolRuntime[CandidateAgentState],
+async def get_access_token(
+    interviewer:UserSH
 ):
-    """
-       根据职位信息，获取面试官可用的面试时间。
-       """
-    interviewer: UserSH = runtime.state['interviewer']
-    # 获取该用户的钉钉账号
-    union_id: str|None = None
     async with AsyncSessionFactory() as session:
         async with session.begin():
             try:
                 user_repo = UserRepo(session)
                 dingding_user: DingdingUserModel | None = await user_repo.get_dingding_user(user_id=interviewer.id)
                 if not dingding_user:
-                    return f"获取候选人可用时间失败，没有绑定钉钉账号！"
+                    return f"获取access token 失败，没有绑定钉钉账号！"
                 union_id = dingding_user.union_id
             except Exception as e:
                 return f"获取候选人可用时间失败：{e}"
@@ -128,6 +123,40 @@ async def get_interviewer_available_slot(
     except Exception as e:
         logger.error(e)
         return f"获取access_toke败：{e}"
+    return union_id, access_token_info
+
+
+@tool
+async def get_interviewer_available_slot(
+        runtime:ToolRuntime[CandidateAgentState],
+):
+    """
+       根据职位信息，获取面试官可用的面试时间。
+       """
+    interviewer: UserSH = runtime.state['interviewer']
+    # 获取该用户的钉钉账号
+
+
+    union_id, access_token_info = await get_access_token(interviewer)
+
+    # union_id: str|None = None
+    # async with AsyncSessionFactory() as session:
+    #     async with session.begin():
+    #         try:
+    #             user_repo = UserRepo(session)
+    #             dingding_user: DingdingUserModel | None = await user_repo.get_dingding_user(user_id=interviewer.id)
+    #             if not dingding_user:
+    #                 return f"获取候选人可用时间失败，没有绑定钉钉账号！"
+    #             union_id = dingding_user.union_id
+    #         except Exception as e:
+    #             return f"获取候选人可用时间失败：{e}"
+    # try:
+    #     # 2. 获取access_token
+    #     r = await get_redis()
+    #     access_token_info = await get_user_access_token(interviewer.id, r)
+    # except Exception as e:
+    #     logger.error(e)
+    #     return f"获取access_toke败：{e}"
 
     # 3. 从钉钉上获取面试官的日程安排
     try:
@@ -157,7 +186,7 @@ async def get_interviewer_available_slot(
 
 
 @tool
-async def send_interviewer_email(
+async def send_interview_email(
     runtime:ToolRuntime[CandidateAgentState],
     interview_datetime_str:str,
 ):
@@ -194,6 +223,140 @@ async def send_interviewer_email(
     return f"给候选人发送面试邀请邮件成功！面试时间初步确定为：{interview_datetime_str}"
 
 
+@tool
+async def confirm_interview_time(
+    interview_datetime_str: str,
+    runtime: ToolRuntime[CandidateAgentState],
+):
+    """
+    确认最终的面试时间。这个工具会做以下四件事：
+    * 通过邮件，发送最终确认面试的时间给候选人
+    * 给面试官的钉钉创建一个面试的日程安排
+    * 在系统中创建一个面试预约记录
+    # 在系统中修改候选人的状态为待面试
+    :param interview_datetime_str: 面试时间，ISO8601格式的字符串
+    """
+    position = runtime.state['position']
+    candidate = runtime.state['candidate']
+    interviewer = runtime.state['interviewer']
+
+    try:
+        interview_datetime: datetime = iso8601_to_datetime_beijing(interview_datetime_str)
+        # 由于后面存储数据库，不能在日期中带时区，所以这里先处理一下
+        if interview_datetime.tzinfo is not None:
+            interview_datetime_without_tz = interview_datetime.astimezone(None).replace(tzinfo=None)
+    except Exception as e:
+        return f"{interview_datetime_str}格式化失败！{e}"
+
+    subject = "【知了课堂】面试时间确定"
+    body = f"""
+"尊敬的{candidate.name}，
+面试时间已确定：
+{interview_datetime_str}
+请您准时参加面试。该邮件无需再回复。谢谢！
+"""
+    email_bot = get_mail_bot_()
+    try:
+        await email_bot.send_email(
+            to=candidate.email,
+            subject=subject,
+            text=body,
+        )
+    except Exception as e:
+        logger.error(e)
+        return f"给候选人发送邮件失败：{e}"
+
+    union_id, access_token_info = await get_access_token(interviewer)
+    access_token = access_token_info.get("access_token")
+
+    try:
+        end_datetime: datetime = interview_datetime + timedelta(hours=1)
+        await create_calendar(
+            union_id=union_id,
+            access_token=access_token,
+            summary=f"面试安排：{position.title} - {candidate.name}",
+            start_datetime=interview_datetime,
+            end_datetime=end_datetime,
+        )
+    except Exception as e:
+        return f"创建钉钉面试日程安排失败，错误信息：\n{e}"
+
+
+    try:
+        async with AsyncSessionFactory() as session:
+            async with session.begin():
+                interview_repo = InterviewRepo(session)
+                # 3. 在数据库中创建一个面试预约记录
+                await interview_repo.create_interview({
+                    # 面试时间因为是存储到postgresql数据库中，现在是只能存储没有带时区的日期
+                    "scheduled_time": interview_datetime_without_tz,
+                    "result": InterviewResultEnum.PENDING,
+                    "candidate_id": candidate.id,
+                    "interviewer_id": interviewer.id,
+                })
+                # 4. 在数据库中修改候选人的状态为待面试
+                candidate_repo = CandidateRepo(session)
+                await candidate_repo.update_candidate_status(
+                    candidate_id=candidate.id,
+                    status=CandidateStatusEnum.WAITING_FOR_INTERVIEW,
+                )
+    except Exception as e:
+        return f"在系统中创建面试预约记录和候选人状态修改失败！{e}"
+
+    return f"""
+    * 给候选人发送面试时间执行成功！
+    * 给面试官创建钉钉日程安排成功！
+    * 在系统中创建面试预约成功！
+    * 在系统中修改候选人状态为待面试成功！
+    """
+
+
+@tool
+async def refuse_interview(
+    runtime: ToolRuntime[CandidateAgentState],
+):
+    """
+    如果候选人拒绝了面试，那么调用该工具来更新候选人状态为拒绝面试
+    """
+    candidate = runtime.state['candidate']
+    try:
+        async with AsyncSessionFactory() as session:
+            async with session.begin():
+                candidate_repo = CandidateRepo(session)
+                await candidate_repo.update_candidate_status(
+                    candidate_id=candidate.id,
+                    status=CandidateStatusEnum.REFUSED_INTERVIEW,
+                )
+        return "已修改候选人状态为拒绝面试！"
+    except Exception as e:
+        return f"修改候选人状态为拒绝面试失败！"
+
+
+@tool
+def get_current_time() -> str:
+    """
+    获取当前时间（北京时间）：年月日、时分秒、星期几、当月第几天
+    """
+    now_bj = datetime.now()
+
+    weekday_map = {
+        0: "星期一",
+        1: "星期二",
+        2: "星期三",
+        3: "星期四",
+        4: "星期五",
+        5: "星期六",
+        6: "星期日",
+    }
+    weekday_cn = weekday_map[now_bj.weekday()]
+
+    day_of_month = now_bj.day
+
+    return (
+        f"{now_bj.year}年{now_bj.month}月{now_bj.day}日 "
+        f"{now_bj.hour:02d}:{now_bj.minute:02d}:{now_bj.second:02d} "
+        f"{weekday_cn}（本月第{day_of_month}天）"
+    )
 
 
 class CandidateProcessAgent:
@@ -221,6 +384,10 @@ class CandidateProcessAgent:
             tools=[
                 score_for_candidate,
                 get_interviewer_available_slot,
+                send_interview_email,
+                confirm_interview_time,
+                refuse_interview,
+                get_current_time
             ],
             system_prompt=CANDIDATE_PROCESS_SYSTEM_PROMPT,
             state_schema=cast(type[AgentState], CandidateAgentState),

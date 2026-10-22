@@ -11,6 +11,7 @@ from .candidate import CandidateModel
 
 
 class InterviewResultEnum(StrEnum):
+    PENDING = "PENDING"
     PASSED = "PASSED"
     FAILED = "FAILED"
 
