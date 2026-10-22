@@ -5,12 +5,29 @@
 - send_email() 主动发信
 - reply()      回复某封邮件（带正确的会话线程头）
 
-与课程版的三处关键差异：
-1. 回复前用 Message-ID 查重（state.seen_ids），游标回退也不会重复回信；
-2. mark_seen 用 create_task 但保留任务引用 + done 回调清理，
-   修复"裸 create_task 可能被 GC 回收导致任务没执行完"的经典坑；
-3. 命中规则通过 on_match 回调通知业务方，"提醒"方式由外部决定
-   （打日志 / 推 IM / 写数据库都行），机器人不关心。
+属性	                    说明
+bot.is_connected	    是否已连接（bool）
+bot.settings	        MailSettings 实例
+bot.rules	            规则列表
+bot._state.last_uid	    当前游标 UID
+bot._state.is_seen(msg_id)	某邮件是否已处理
+bot._bg_tasks	        正在运行的后台任务集合
+
+poll_once() — 一轮完整处理：
+    1. 读 last_uid（从 mailbot_state.json）
+       ├─ None → 冷启动，设 last_uid = 当前最大 UID，返回 []
+       └─ 有值 → 搜索 UID > last_uid 的新邮件
+
+    2. 对每封新邮件:
+       ├─ parse_email() → 结构化解析
+       ├─ save_all() → 附件落盘
+       ├─ mark_seen() → 标记已读（IMAP \Seen + state 去重）
+       ├─ 遍历 rules 匹配关键词
+       │   ├─ 命中 → reply() 自动回复（如果 auto_reply=True）
+       │   └─ on_match() 通知回调（日志/钉钉/Webhook）
+       └─ 更新 last_uid（无论成功失败都推进）
+
+
 """
 from __future__ import annotations
 
