@@ -1,5 +1,8 @@
+import os
 import sys
 import asyncio
+
+from utils.emailbot.mail_manager import MailManager
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -24,9 +27,17 @@ from app.core.redis_client import init_redis, close_redis
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_redis()
+    await MailManager.init(
+        imap_host=os.getenv("IMAP_HOST", "imap.163.com"),
+        smtp_host=os.getenv("SMTP_HOST", "smtp.163.com"),
+        smtp_port=int(os.getenv("SMTP_PORT", "465")),
+        email=os.getenv("MAIL_USERNAME"),
+        password=os.getenv("MAIL_PASSWORD"),
+    )
 
     yield
 
+    await MailManager.close()
     await close_redis()
 
 

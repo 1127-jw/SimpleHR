@@ -155,6 +155,15 @@ async def get_interviewer_available_slot(
         return f"获取面试官可用时间失败：{e}"
 
 
+@tool
+async def send_interviewer_email(
+    runtime:ToolRuntime[CandidateAgentState],
+    interviewer_datetime_str:str,
+):
+    pass
+
+
+
 class CandidateProcessAgent:
     def __init__(self,
         candidate:CandidateSchema|None,
@@ -177,7 +186,10 @@ class CandidateProcessAgent:
         assert self._checkpointer is not None
         agent = create_agent(
             model=qwen_llm,
-            tools=[score_for_candidate],
+            tools=[
+                score_for_candidate,
+                get_interviewer_available_slot,
+            ],
             system_prompt=CANDIDATE_PROCESS_SYSTEM_PROMPT,
             state_schema=cast(type[AgentState], CandidateAgentState),
             middleware=[

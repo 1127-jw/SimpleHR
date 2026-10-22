@@ -21,14 +21,14 @@ from typing import Awaitable, Callable, Optional
 
 from loguru import logger
 
-from attachments import AttachmentSaver
-from config import MailSettings
-from imap_client import ImapClient
-from models import ParsedEmail
-from parser import parse_email
-from rules import MailRule
-from smtp_client import SmtpClient
-from state import StateStore
+from utils.emailbot.attachments import AttachmentSaver
+from utils.emailbot.config import MailSettings
+from utils.emailbot.imap_client import ImapClient
+from utils.emailbot.models import ParsedEmail
+from utils.emailbot.parser import parse_email
+from utils.emailbot.rules import MailRule
+from utils.emailbot.smtp_client import SmtpClient
+from utils.emailbot.state import StateStore
 
 # 命中规则后的回调：async def hook(email, rule) -> None
 MatchHook = Callable[[ParsedEmail, MailRule], Awaitable[None]]
@@ -90,6 +90,7 @@ class MailBot:
         """发射后台任务：保留引用 + 完成即移除 + 异常记录。"""
         task = asyncio.create_task(coro)
         self._bg_tasks.add(task)
+        # add_done_callback 是 asyncio.Task 的方法，用于在任务完成时自动执行一个回调函数。
         task.add_done_callback(self._bg_tasks.discard)
 
     # ---------- 收件与处理 ----------

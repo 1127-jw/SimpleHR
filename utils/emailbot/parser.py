@@ -14,7 +14,7 @@ from email.message import Message
 from email.utils import getaddresses, parsedate_to_datetime
 from typing import Optional
 
-from models import Attachment, EmailAddress, ParsedEmail
+from utils.emailbot.models import Attachment, EmailAddress, ParsedEmail
 
 # 一些客户端会把附件名报成这些"占位名"，此时按 content-type 猜扩展名
 _PLACEHOLDER_NAMES = {"", "attachment", "noname", "n/a", "file"}

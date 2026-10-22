@@ -14,8 +14,8 @@ from pathlib import Path
 
 from loguru import logger
 
-from models import Attachment, ParsedEmail
-from parser import extract_attachments
+from utils.emailbot.models import Attachment, ParsedEmail
+from utils.emailbot.parser import extract_attachments
 
 # Windows/Linux 都安全的字符集：中文保留，只滤掉路径与非法符号
 _UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')

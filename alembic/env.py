@@ -22,6 +22,8 @@ from app.models import (
     ResumeModel,
 )
 
+# from utils.emailbot.models import
+
 settings = get_settings()
 
 if sys.platform == "win32":
