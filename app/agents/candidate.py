@@ -30,6 +30,7 @@ from loguru import logger
 from datetime import datetime, timedelta
 import json
 
+from utils.emailbot.mail_manager import get_mail_bot_
 from utils.time_ISO8601_datatime import iso8601_to_datetime_beijing
 from utils.available_time import find_available_slot
 settings = get_settings()
@@ -158,9 +159,40 @@ async def get_interviewer_available_slot(
 @tool
 async def send_interviewer_email(
     runtime:ToolRuntime[CandidateAgentState],
-    interviewer_datetime_str:str,
+    interview_datetime_str:str,
 ):
-    pass
+    """
+    给候选人发送面试时间邀请（并非最终面试时间，后续可能还需要通过邮件来和候选人协商最终面试时间）
+    :param interview_datetime_str: 面试时间的字符串
+    """
+    candidate = runtime.state['candidate']
+    position = runtime.state['position']
+
+    email_bot = get_mail_bot_()
+
+    subject = "【知了课堂】面试邀请-协商面试时间"
+    body = f"""
+尊敬的{candidate.name}，
+您好！
+感谢您投递我司{position.title}职位。
+我们初步确定了您的面试时间，请您确认是否方便。
+面试时间：{interview_datetime_str}
+请您确认是否方便，如果方便，请您回复“确认”。
+如果不方便，请回复您方便的时间，我们将会重新协商面试时间。
+谢谢！
+            """
+    try:
+        await email_bot.send_email(
+            to=candidate.email,
+            subject=subject,
+            text=body,
+        )
+    except Exception as e:
+        logger.error(e)
+        return f"给候选人发送邮件失败：{e}"
+
+    return f"给候选人发送面试邀请邮件成功！面试时间初步确定为：{interview_datetime_str}"
+
 
 
 

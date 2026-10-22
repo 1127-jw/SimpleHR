@@ -5,6 +5,9 @@
 - send_email() 主动发信
 - reply()      回复某封邮件（带正确的会话线程头）
 
+on_match 邮件规则命中后执行的回调动作 可以换成企业微信/钉钉 webhook，或写库后推前端
+
+
 属性	                    说明
 bot.is_connected	    是否已连接（bool）
 bot.settings	        MailSettings 实例
@@ -214,7 +217,10 @@ class MailBot:
         return [parse_email(u, m) for u, m in await self._imap.fetch_many(uids)]
 
     # ---------- 发件 ----------
-    async def send_email(self, *, to: str | list[str], subject: str,
+    async def send_email(self,
+                         *,
+                         to: str | list[str],
+                         subject: str,
                          text: str, html: str | None = None,
                          cc: str | list[str] | None = None) -> None:
         await self._ensure_connected()

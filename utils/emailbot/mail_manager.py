@@ -180,3 +180,6 @@ def get_mail_bot(request: Request) -> MailBot:
     """从全局单例获取 bot 实例。"""
     return MailManager.get().bot
 
+def get_mail_bot_() -> MailBot:
+    """从全局单例获取 bot 实例。"""
+    return MailManager.get().bot
