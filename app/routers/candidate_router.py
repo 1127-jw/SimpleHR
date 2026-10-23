@@ -6,7 +6,9 @@ from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.models.user import UserModel
 from uuid import uuid4
-
+from app.schemas.candidate_schema import CandidateSchema
+from app.schemas.position_schema import PositionSchema
+from app.schemas.user_schema import UserSH
 
 
 from app.schemas.candidate_schema import ResumeUploadRespSchema, ResumePaseSchema, ResumeParseTaskRespSchema, \
@@ -16,6 +18,10 @@ from app.service.candidate_ser import resume_upload_service, parse_resume_servic
 from redis.asyncio import Redis
 from app.core.redis_client import get_redis
 from app.schemas.response_schema import ResponseSchema
+from app.repository.position_repo import PositionRepo
+from app.repository.resume_repo import CandidateRepo
+from app.repository.user_repo import UserRepo
+from app.tasks.agent_tasks import run_candidate_agent
 
 settings = get_settings()
 
@@ -76,4 +82,27 @@ async def create_candidate(
     candidate = await create_candidate_ser(session,current_user,candidate_data)
 
     return ResponseSchema()
+
+
+@router.get("/agent/test")
+async def agent_test(
+        session:Annotated[AsyncSession, Depends(get_db)],
+        background_tasks: BackgroundTasks,
+):
+    async with session.begin():
+        candidate_repo = CandidateRepo(session)
+        position_repo = PositionRepo(session)
+        user_repo = UserRepo(session)
+        #获取ORM模型对象
+        candidate_model = await candidate_repo.get_by_id("fhzsuTctybq4Env92YuR9b")
+        position_model =  await position_repo.get_by_id("RBk6bC648aS7EmK6gcARbD")
+        interviewer_model = await user_repo.get_by_id("9iqEJnR8iZwJSHLxoHcQke")
+        #把ORM模型对象转成schema对象
+        candidate = CandidateSchema.model_validate(candidate_model)
+        position = PositionSchema.model_validate(position_model)
+        interviewer = UserSH.model_validate(interviewer_model)
+
+        background_tasks.add_task(run_candidate_agent, candidate, position, interviewer)
+
+        return {"result": "success"}
 

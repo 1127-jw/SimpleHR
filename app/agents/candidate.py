@@ -36,6 +36,11 @@ from utils.emailbot.mail_manager import get_mail_bot_
 from utils.time_ISO8601_datatime import iso8601_to_datetime_beijing
 from utils.available_time import find_available_slot
 
+# from langchain_core.globals import set_debug, set_verbose
+#
+# set_debug(True)
+# set_verbose(False)  # 避免日志重复
+
 settings = get_settings()
 T = TypeVar("T")
 
@@ -58,7 +63,6 @@ async def score_for_candidate(
     并给出总分(综合评分)和优缺点总结
     """
 
-
     candidate: CandidateSchema = runtime.state["candidate"]
     position: PositionSchema = runtime.state["position"]
 
@@ -74,12 +78,15 @@ async def score_for_candidate(
     )
 
     score_template = PromptTemplate.from_template(SCORE_FOR_CANDIDATE_USER_PROMPT)
-    prompt = score_template.format(position=position.model_dump_json(), candidate=candidate.model_dump_json())
+    # 将 ORM 模型转为 Pydantic Schema，再序列化
+    candidate_schema = CandidateSchema.model_validate(candidate)
+    position_schema = PositionSchema.model_validate(position)
+    prompt = score_template.format(position=position_schema.model_dump_json(), candidate=candidate_schema.model_dump_json())
 
     res = await score_agent.ainvoke(
-        prompt
+        {"messages": [{"role": "user", "content": prompt}]}
     )
-    candidate_score:AgentCandidateScoreSchema = res["structured_response"]
+    candidate_score: AgentCandidateScoreSchema = res["structured_response"]
     #将候选人得分插入到数据库中
     async with AsyncSessionFactory() as session:
         async with session.begin():
@@ -90,15 +97,16 @@ async def score_for_candidate(
                     candidate_id=candidate.id,
                     candidate_score_dict=candidate_score.model_dump(),
                 )
-                # 判断是否符合要求（总分>8）,将候选人状态修改为AI_PASS,否则为AI_FAILED
+                # 判断是否符合要求（总分>7）,将候选人状态修改为AI_PASS,否则为AI_FAILED
                 candidate_repo = CandidateRepo(session)
-                if candidate_score.overall_score > 8:
+                if candidate_score.overall_score > 7:
                     await candidate_repo.update_candidate_status(candidate_id=candidate.id,
                                                                  status=CandidateStatusEnum.AI_FILTER_PASSED)
                 else:
                     await candidate_repo.update_candidate_status(candidate_id=candidate.id,
                                                                  status=CandidateStatusEnum.AI_FILTER_FAILED)
             except Exception as e:
+                logger.error(f"AI评分写入数据库失败: {e}")
                 return f"ai评分写入db失败，错误信息为{e}"
     return f"ai评分工具执行成功，该候选人的评分为{candidate_score.model_dump_json()}"
 
@@ -137,26 +145,11 @@ async def get_interviewer_available_slot(
     # 获取该用户的钉钉账号
 
 
-    union_id, access_token_info = await get_access_token(interviewer)
-
-    # union_id: str|None = None
-    # async with AsyncSessionFactory() as session:
-    #     async with session.begin():
-    #         try:
-    #             user_repo = UserRepo(session)
-    #             dingding_user: DingdingUserModel | None = await user_repo.get_dingding_user(user_id=interviewer.id)
-    #             if not dingding_user:
-    #                 return f"获取候选人可用时间失败，没有绑定钉钉账号！"
-    #             union_id = dingding_user.union_id
-    #         except Exception as e:
-    #             return f"获取候选人可用时间失败：{e}"
-    # try:
-    #     # 2. 获取access_token
-    #     r = await get_redis()
-    #     access_token_info = await get_user_access_token(interviewer.id, r)
-    # except Exception as e:
-    #     logger.error(e)
-    #     return f"获取access_toke败：{e}"
+    result = await get_access_token(interviewer)
+    # 错误时返回字符串，成功时返回元组
+    if isinstance(result, str):
+        return result
+    union_id, access_token_info = result
 
     # 3. 从钉钉上获取面试官的日程安排
     try:
@@ -178,8 +171,8 @@ async def get_interviewer_available_slot(
         )
         if len(available_slots) == 0:
             return f"获取面试官可用时间失败：7天内没有空闲时间！"
-        available_times = [(slot[0], slot[1]) for slot in available_slots]
-        return f"找到面试官可用的时间：{json.dumps(available_times)}"
+        available_times = [(slot[0].strftime("%Y-%m-%d %H:%M"), slot[1].strftime("%Y-%m-%d %H:%M")) for slot in available_slots]
+        return f"找到面试官可用的时间：{json.dumps(available_times, ensure_ascii=False)}"
 
     except Exception as e:
         return f"获取面试官可用时间失败：{e}"
@@ -266,7 +259,11 @@ async def confirm_interview_time(
         logger.error(e)
         return f"给候选人发送邮件失败：{e}"
 
-    union_id, access_token_info = await get_access_token(interviewer)
+    result = await get_access_token(interviewer)
+    # 错误时返回字符串，成功时返回元组
+    if isinstance(result, str):
+        return result
+    union_id, access_token_info = result
     access_token = access_token_info.get("access_token")
 
     try:
@@ -400,18 +397,24 @@ class CandidateProcessAgent:
                     trigger=("tokens", 50000),
                     keep=("tokens", 10000),
                 ),
+
             ],
             checkpointer=self._checkpointer,
         )
         resp = await agent.ainvoke(
             {
-                "messages":messages,
+                "messages": messages,
+                "candidate": self.candidate,
+                "position": self.position,
+                "interviewer": self.interviewer,
             },
-            thread_id=thread_id,
+            config={"configurable": {"thread_id": thread_id}},
         )
         return resp
     async def __aenter__(self):
-        self._checkpointer_conn = AsyncPostgresSaver.from_conn_string(settings.database_url)
+        # AsyncPostgresSaver 需要 postgresql:// 格式，去掉 SQLAlchemy 的 +psycopg 前缀
+        pg_url = settings.database_url.replace("+psycopg", "")
+        self._checkpointer_conn = AsyncPostgresSaver.from_conn_string(pg_url)
         self._checkpointer = await self._checkpointer_conn.__aenter__()
         await self._checkpointer.setup()
         return self

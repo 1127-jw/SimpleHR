@@ -3,50 +3,18 @@ import asyncio
 from typing import Optional
 
 from fastapi import Request
+from langchain_core.messages import HumanMessage
 
 from loguru import logger
 
+from app.models.candidate import CandidateStatusEnum
 from utils.emailbot.bot import MailBot
 from utils.emailbot.config import MailSettings
 from utils.emailbot.models import ParsedEmail
 from utils.emailbot.rules import DEFAULT_RULES
-
-
-async def notify(email: ParsedEmail, rule) -> None:
-    # ---- 基本信息 ----
-    print(f"UID:        {email.uid}")
-    print(f"Message-ID: {email.message_id}")
-    print(f"主题:       {email.subject}")
-    print(f"日期:       {email.date}")
-
-    # ---- 发件人 ----
-    print(f"发件人姓名: {email.from_.name}")
-    print(f"发件人地址: {email.from_.address}")
-    print(f"发件地址(小写): {email.sender}")
-
-    # ---- 收件人 ----
-    for addr in email.to:
-        print(f"收件人: {addr.name} <{addr.address}>")
-
-    for addr in email.cc:
-        print(f"抄送:   {addr.name} <{addr.address}>")
-
-    # ---- 正文 ----
-    print(f"纯文本: {email.text[:200]}")   # 前 200 字
-    print(f"HTML:   {email.html[:200]}")   # 原始 HTML
-
-    # ---- 附件 ----
-    for att in email.attachments:
-        print(f"附件名:   {att.filename}")
-        print(f"类型:     {att.content_type}")
-        print(f"大小:     {att.size} bytes")
-        print(f"落盘路径: {att.saved_path}")
-
-    # ---- 原始 MIME 头（任意头都可取）----
-    raw = email.raw
-    print(f"Reply-To:     {raw.get('Reply-To')}")
-    print(f"References:   {raw.get('References')}")
-    print(f"Content-Type: {raw.get_content_type()}")
+from app.core.db import AsyncSessionFactory
+from app.repository.resume_repo import CandidateRepo
+from utils.emailbot.notify import notify
 
 
 class MailManager:

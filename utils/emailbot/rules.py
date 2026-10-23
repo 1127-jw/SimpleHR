@@ -25,9 +25,14 @@ class MailRule:
     case_sensitive: bool = False
     require_attachment: bool = False           # 必须带附件才算命中（"投了简历"）
     reply_text: str | None = None              # 命中后的回复文案；None 表示只提醒不回信
+    catch_all: bool = False                    # 保底规则：未命中其他规则时触发
 
     def matches(self, subject: str, sender: str, body: str,
                 attachment_names: list[str]) -> bool:
+        # 保底规则：直接命中所有邮件
+        if self.catch_all:
+            return True
+
         if self.require_attachment and not attachment_names:
             return False
 
@@ -64,9 +69,17 @@ DEFAULT_RULES = [
         reply_text="您好，您的简历已收到，我们会在评估后与您联系。",
     ),
     MailRule(
-        name="询问面试进度",
-        keywords=["面试安排", "面试进度", "什么时候面试", "有结果了吗"],
+        name="询问面试时间或进度",
+        keywords=["面试","面试安排", "面试进度", "什么时候面试", "有结果了吗", "可以面试", "有时间", "安排面试", "去面试", "来面试"],
         fields=["subject", "body"],
         reply_text="您好，您的应聘状态正在评估中，请耐心等待通知。",
+    ),
+    # 保底规则：放在最后，未命中其他规则时触发
+    MailRule(
+        name="其他邮件",
+        keywords=[],
+        fields=[],
+        catch_all=True,
+        reply_text="您好，您的邮件已收到，我们会尽快处理。",
     ),
 ]

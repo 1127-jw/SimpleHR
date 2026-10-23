@@ -49,6 +49,17 @@ class CandidateRepo(BaseRepo):
             )
         )
 
+    async def get_by_email(self, email: str) -> CandidateModel | None:
+        return await self.session.scalar(
+            select(CandidateModel)
+            .where(CandidateModel.email == email)
+            .options(
+                selectinload(CandidateModel.position),
+                selectinload(CandidateModel.resume),
+                selectinload(CandidateModel.creator)
+            )
+        )
+
     async def get_list(
         self,
         current_user: UserModel,
