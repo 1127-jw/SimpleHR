@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks, Query
 from typing import Annotated, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
@@ -6,7 +6,7 @@ from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.models.user import UserModel
 from uuid import uuid4
-from app.schemas.candidate_schema import CandidateSchema
+from app.schemas.candidate_schema import CandidateSchema, CandidateListSchema
 from app.schemas.position_schema import PositionSchema
 from app.schemas.user_schema import UserSH
 
@@ -22,6 +22,7 @@ from app.repository.position_repo import PositionRepo
 from app.repository.resume_repo import CandidateRepo
 from app.repository.user_repo import UserRepo
 from app.tasks.agent_tasks import run_candidate_agent
+from app.models.candidate import CandidateStatusEnum
 
 settings = get_settings()
 
@@ -78,31 +79,58 @@ async def create_candidate(
     candidate_data:CandidateCreateSchema,
     session:Annotated[AsyncSession, Depends(get_db)],
     current_user:Annotated[UserModel,Depends(get_current_user)],
+    background_tasks: BackgroundTasks,
 ):
-    candidate = await create_candidate_ser(session,current_user,candidate_data)
+    candidate_schema, position_schema, interviewer_schema= await create_candidate_ser(session,current_user,candidate_data)
 
+    background_tasks.add_task(
+        run_candidate_agent,
+        candidate=candidate_schema,
+        position=position_schema,
+        interviewer=interviewer_schema,
+    )
     return ResponseSchema()
 
-
-@router.get("/agent/test")
-async def agent_test(
-        session:Annotated[AsyncSession, Depends(get_db)],
-        background_tasks: BackgroundTasks,
+@router.get("/list", summary="获取候选人列表", response_model=CandidateListSchema)
+async def get_candidate_list(
+    session:Annotated[AsyncSession, Depends(get_db)],
+    page: int = Query(1, description="页码"),
+    size: int = Query(10, description="每页的数量"),
+    position_id: str|None = Query(None, description="职位的ID"),
+    status: CandidateStatusEnum|None = Query(None, description="候选人状态"),
+    current_user: UserModel = Depends(get_current_user),
 ):
     async with session.begin():
-        candidate_repo = CandidateRepo(session)
-        position_repo = PositionRepo(session)
-        user_repo = UserRepo(session)
-        #获取ORM模型对象
-        candidate_model = await candidate_repo.get_by_id("fhzsuTctybq4Env92YuR9b")
-        position_model =  await position_repo.get_by_id("RBk6bC648aS7EmK6gcARbD")
-        interviewer_model = await user_repo.get_by_id("9iqEJnR8iZwJSHLxoHcQke")
-        #把ORM模型对象转成schema对象
-        candidate = CandidateSchema.model_validate(candidate_model)
-        position = PositionSchema.model_validate(position_model)
-        interviewer = UserSH.model_validate(interviewer_model)
+        candidate_repo = CandidateRepo(session=session)
+        candidates = await candidate_repo.get_list(
+            current_user=current_user,
+            position_id=position_id,
+            status=status,
+            page=page,
+            size=size,
+        )
+        return {"candidates": candidates}
 
-        background_tasks.add_task(run_candidate_agent, candidate, position, interviewer)
 
-        return {"result": "success"}
+# @router.get("/agent/test")
+# async def agent_test(
+#         session:Annotated[AsyncSession, Depends(get_db)],
+#         background_tasks: BackgroundTasks,
+# ):
+#     async with session.begin():
+#         candidate_repo = CandidateRepo(session)
+#         position_repo = PositionRepo(session)
+#         user_repo = UserRepo(session)
+#         #获取ORM模型对象
+#         candidate_model = await candidate_repo.get_by_id("fhzsuTctybq4Env92YuR9b")
+#         position_model =  await position_repo.get_by_id("RBk6bC648aS7EmK6gcARbD")
+#         interviewer_model = await user_repo.get_by_id("9iqEJnR8iZwJSHLxoHcQke")
+#         #把ORM模型对象转成schema对象
+#         candidate = CandidateSchema.model_validate(candidate_model)
+#         position = PositionSchema.model_validate(position_model)
+#         interviewer = UserSH.model_validate(interviewer_model)
+#
+#         background_tasks.add_task(run_candidate_agent, candidate, position, interviewer)
+#
+#         return {"result": "success"}
 

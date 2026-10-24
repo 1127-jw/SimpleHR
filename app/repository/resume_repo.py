@@ -30,6 +30,9 @@ class CandidateRepo(BaseRepo):
     async def create_candidate(self, candidate_info: dict) -> CandidateModel:
         candidate = CandidateModel(**candidate_info)
         self.session.add(candidate)
+        # .flush 内存 → 数据库 把当前对象的变更同步到数据库，但不一定提交事务
+        # .refresh 数据库 → 内存 重新查一次数据库，覆盖对象当前属性
+        # .commit 内存 → 数据库并持久化	提交事务，使变更真正生效
         await self.session.flush([candidate])
         await self.session.refresh(candidate, ['position', 'resume'])
         return candidate

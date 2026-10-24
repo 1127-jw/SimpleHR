@@ -3,17 +3,15 @@ import asyncio
 from typing import Optional
 
 from fastapi import Request
-from langchain_core.messages import HumanMessage
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from loguru import logger
 
-from app.models.candidate import CandidateStatusEnum
 from utils.emailbot.bot import MailBot
 from utils.emailbot.config import MailSettings
-from utils.emailbot.models import ParsedEmail
+
 from utils.emailbot.rules import DEFAULT_RULES
-from app.core.db import AsyncSessionFactory
-from app.repository.resume_repo import CandidateRepo
+
 from utils.emailbot.notify import notify
 
 
@@ -21,8 +19,8 @@ class MailManager:
     """邮件机器人全局单例。"""
 
     _instance: Optional["MailManager"] = None
+    _scheduler: Optional[AsyncIOScheduler] = None
     _bot: Optional[MailBot] = None
-    _poll_task: Optional[asyncio.Task] = None
     _initialized: bool = False
 
     def __new__(cls) -> "MailManager":
@@ -51,6 +49,9 @@ class MailManager:
         cls,
         *,
         imap_host: str = "imap.163.com",
+        imap_port: int | None = None,
+        imap_ssl: bool | None = None,
+        imap_mailbox: str | None = None,
         smtp_host: str = "smtp.163.com",
         smtp_port: int = 465,
         smtp_starttls: bool = False,
@@ -58,8 +59,11 @@ class MailManager:
         email: str | None = None,
         password: str | None = None,
         poll_interval: int = 20,
+        fetch_limit: int | None = None,
         attach_dir: str = "./attachments",
         state_file: str = "./mailbot_state.json",
+        auto_reply: bool | None = None,
+        reply_text: str | None = None,
         rules: list | None = None,
         on_match=notify,
     ) -> "MailManager":
@@ -72,18 +76,27 @@ class MailManager:
 
         logger.info("MailManager 初始化中...")
 
-        settings = MailSettings(
-            imap_host=imap_host,
-            smtp_host=smtp_host,
-            smtp_port=smtp_port,
-            smtp_starttls=smtp_starttls,
-            smtp_implicit_ssl=smtp_implicit_ssl,
-            email=email,
-            password=password,
-            poll_interval=poll_interval,
-            attach_dir=attach_dir,
-            state_file=state_file,
-        )
+        # 只传非 None 参数，让 MailSettings 使用其默认值
+        settings_kwargs = {
+            'imap_host': imap_host,
+            'smtp_host': smtp_host,
+            'smtp_port': smtp_port,
+            'smtp_starttls': smtp_starttls,
+            'smtp_implicit_ssl': smtp_implicit_ssl,
+            'email': email,
+            'password': password,
+            'poll_interval': poll_interval,
+            'attach_dir': attach_dir,
+            'state_file': state_file,
+            'imap_port': imap_port,
+            'imap_ssl': imap_ssl,
+            'imap_mailbox': imap_mailbox,
+            'fetch_limit': fetch_limit,
+            'auto_reply': auto_reply,
+            'reply_text': reply_text,
+        }
+        settings_kwargs = {k: v for k, v in settings_kwargs.items() if v is not None}
+        settings = MailSettings(**settings_kwargs)
 
         mgr._bot = MailBot(
             settings,
@@ -97,22 +110,33 @@ class MailManager:
         except Exception:
             logger.exception("邮箱连接失败，继续启动（后台会重试）")
 
-        mgr._poll_task = asyncio.create_task(mgr._poll_loop())
+        # 使用 APScheduler 定时轮询，
+        # max_instances = 1：上次轮询未完成时不会触发新轮询,防止重叠执行
+        # coalesce = True：服务暂停期间错过的轮询只补执行一次，不会积压
+        # shutdown(wait=False)：关闭时立即停止，不用等当前轮询结束
+        cls._scheduler = AsyncIOScheduler()
+        cls._scheduler.add_job(
+            cls._poll_once,     # 要执行的函数
+            'interval',  # 触发器类型
+            seconds=poll_interval,# 间隔时间（秒）
+            id='mail_poll',     # 任务唯一标识
+            max_instances=1,    # 最大并发实例数
+            coalesce=True,      # 合并错过的执行
+        )
+        cls._scheduler.start()
         mgr._initialized = True
 
         logger.info("MailManager 初始化完成，轮询每 {}s 一次", poll_interval)
         return mgr
 
     @classmethod
-    async def _poll_loop(cls) -> None:
-        """后台轮询循环。"""
+    async def _poll_once(cls) -> None:
+        """单次轮询任务。"""
         mgr = cls.get()
-        while True:
-            try:
-                await mgr._bot.poll_once()
-            except Exception:
-                logger.exception("poll round crashed, will retry")
-            await asyncio.sleep(mgr._bot.settings.poll_interval)
+        try:
+            await mgr._bot.poll_once()
+        except Exception:
+            logger.exception("poll round crashed, will retry")
 
     # ========== 关闭 ==========
     @classmethod
@@ -126,20 +150,16 @@ class MailManager:
 
         logger.info("MailManager 关闭中...")
 
-        # 1. 取消轮询
-        if mgr._poll_task and not mgr._poll_task.done():
-            mgr._poll_task.cancel()
-            try:
-                await mgr._poll_task
-            except asyncio.CancelledError:
-                pass
+        # 1. 停止调度器
+        if cls._scheduler:
+            cls._scheduler.shutdown(wait=False)
+            cls._scheduler = None
 
         # 2. 断开连接
         if mgr._bot and mgr._bot.is_connected:
             await mgr._bot.close()
 
         mgr._bot = None
-        mgr._poll_task = None
         mgr._initialized = False
 
         logger.info("MailManager 已关闭")

@@ -29,6 +29,7 @@ async def _find_candidate_by_email(email_address: str):
 
 async def notify(email: ParsedEmail, rule) -> None:
     if rule.name == "简历投递":
+        # TODO 简历上传完成后调用CandidateProcessAgent进行解析、评分、面试时间初步确定等动作
         pass
 
     elif rule.name == "询问面试时间或进度":
@@ -54,7 +55,9 @@ async def notify(email: ParsedEmail, rule) -> None:
             logger.info("面试时间安排完成: {}", resp)
 
     else:
+        # TODO 为命中规则时，用便宜模型进行解析，分为简历投递则和询问面试时间或进度，若都不是则为垃圾邮件
         pass
+
     # files = "、".join(a.filename for a in email.attachments) or "（无附件）"
     # logger.info(
     #     "[命中规则] {} | 来自 {} | 主题: {} | 附件: {}",

@@ -1,15 +1,15 @@
 import os
 from fastapi import HTTPException, UploadFile, status,BackgroundTasks
-from openai.types.beta.realtime.response_create_event import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 from pathlib import Path
 from app.repository.resume_repo import ResumeRepo, CandidateRepo
 from app.models.user import UserModel
 from app.models.candidate import ResumeModel
-from app.schemas.candidate_schema import TaskInfoSchema, CandidateCreateSchema
+from app.schemas.candidate_schema import TaskInfoSchema, CandidateCreateSchema, CandidateSchema
 from app.tasks.ocr_tasks import ocr_parse_resume_task
-from app.schemas.response_schema import ResponseSchema
+from app.schemas.position_schema import PositionSchema
+from app.schemas.user_schema import UserSH
 from utils.PDFser import WordToPdfConverter
 import aiofiles
 from loguru import logger
@@ -104,5 +104,8 @@ async def create_candidate_ser(
         candidate_dict['creator_id'] = current_user.id
         candidate_repo = CandidateRepo(session=session)
         candidate = await candidate_repo.create_candidate(candidate_dict)
+        candidate_schema = CandidateSchema.model_validate(candidate)
+        position_schema = PositionSchema.model_validate(candidate.position)
+        interviewer_schema = UserSH.model_validate(candidate.position.creator)
 
-    return candidate
+    return candidate_schema, position_schema, interviewer_schema
