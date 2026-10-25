@@ -27,6 +27,7 @@ class PositionSchema(PositionBaseSchema):
     department: DepartmentSH = Field(..., description="职位所属部门")
     created_at: datetime = Field(..., description='职位创建时间')
     is_open: bool = Field(..., description="是否开发")
+    work_year: int = Field(0, ge=0, description="最小工作年限")
 
     model_config = ConfigDict(from_attributes=True)
 

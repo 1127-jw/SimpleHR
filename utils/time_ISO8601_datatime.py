@@ -11,7 +11,10 @@ def datetime_to_iso8601_beijing(dt: datetime) -> str:
         ISO-8601格式字符串，如：2022-11-27T00:00:00+08:00
     """
     # 定义北京时区（UTC+8）
-    beijing_tz = timezone(timedelta(hours=8))
+    # timedelta(hours=8)：创建一个表示“8小时”的时间差对象。
+    # timezone(...)：datetime.timezone类接收一个timedelta作为参数，生成对应的时区信息。
+    # 整体含义：表示比协调世界时（UTC）快8小时的时区，即UTC + 8。
+    beijing_tz = timezone(timedelta(hours=8),name="Asia/Shanghai")
 
     # 如果datetime是naive（没有时区信息），假设它是本地时间并转换为UTC+8
     if dt.tzinfo is None:

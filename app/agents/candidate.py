@@ -114,6 +114,7 @@ async def score_for_candidate(
 async def get_access_token(
     interviewer:UserSH
 ):
+    """获取面试官钉钉账户的access token"""
     async with AsyncSessionFactory() as session:
         async with session.begin():
             try:
@@ -143,8 +144,6 @@ async def get_interviewer_available_slot(
        """
     interviewer: UserSH = runtime.state['interviewer']
     # 获取该用户的钉钉账号
-
-
     result = await get_access_token(interviewer)
     # 错误时返回字符串，成功时返回元组
     if isinstance(result, str):

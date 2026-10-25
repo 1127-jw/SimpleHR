@@ -61,6 +61,7 @@ class CandidateModel(BaseModel):
         SQLAlchemyEnum(CandidateStatusEnum, values_callable=lambda obj: [e.value for e in obj]),
         default=CandidateStatusEnum.APPLICATION, nullable=False
     )
+    work_year:Mapped[int] = mapped_column(Integer,default=0, nullable=True)
 
     position_id: Mapped[str] = mapped_column(ForeignKey("positions.id"))
     resume_id: Mapped[str] = mapped_column(ForeignKey("resumes.id"))

@@ -57,6 +57,7 @@ class CandidateSchema(BaseModel):
     other_information: str | None = Field(None, description="候选人其他信息")
     skills: str | None = Field(None, description="候选人技能")
     status: CandidateStatusEnum | str | None = Field(None, description="候选人状态")
+    work_year: int = Field(0, description="候选人工作经验")
 
     position: PositionSchema = Field(..., description="候选人申请的职位信息")
     resume: ResumeSchema = Field(..., description="候选人的简历信息")
