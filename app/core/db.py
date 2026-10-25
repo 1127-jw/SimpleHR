@@ -38,10 +38,10 @@ engine = create_async_engine(
 
 # 创建异步会话工厂
 AsyncSessionFactory = async_sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    autoflush=False,
-    expire_on_commit=False,
+    bind=engine,            #绑定异步引擎，必须用 create_async_engine
+    class_=AsyncSession,    #指定返回异步会话类型
+    autoflush=False,        #控制是否自动 flush，通常显式管理更稳
+    expire_on_commit=False, #避免 commit 后访问属性触发隐式异步操作
 )
 
 
