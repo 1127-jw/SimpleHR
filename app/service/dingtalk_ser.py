@@ -9,10 +9,14 @@ from urllib.parse import quote, urljoin
 from redis.asyncio import Redis
 import httpx
 from loguru import logger
-
+from typing import cast, Any
 from app.repository.user_repo import UserRepo
 from app.core.config import get_settings
-from utils.time_ISO8601_datatime import datetime_to_iso8601_beijing
+from app.core.db import AsyncSessionFactory
+from app.core.redis_client import get_redis
+from app.models import DingdingUserModel
+from utils.available_time import find_available_slot
+from utils.time_ISO8601_datatime import datetime_to_iso8601_beijing, iso8601_to_datetime_beijing
 
 settings = get_settings()
 
@@ -104,10 +108,14 @@ async def get_user_access_token(
         state: str,
         r: Redis
 ) -> dict:
+    """
+    通过state获取缓存中的access_token
+
+    """
     ac_cache_key = f"dingtalk:user_actoken:{state}"
     re_cache_key = f"dingtalk:user_retoken:{state}"
     ac_token = await r.get(ac_cache_key)
-    re_token = await r.get(re_cache_key)
+    re_token = str(await r.get(re_cache_key))
     if not ac_token:
         try:
             access_token_info = await refresh_user_access_token(r, state, re_token)
@@ -120,6 +128,31 @@ async def get_user_access_token(
         "access_token": ac_token,
         "state": state
     }
+
+async def get_union_id_and_access_token_by_user_id(interviewer_id:str):
+    """获取面试官钉钉账户的access token"""
+    async with AsyncSessionFactory() as session:
+        async with session.begin():
+            try:
+                user_repo = UserRepo(session)
+                dingding_user: DingdingUserModel | None = await user_repo.get_dingding_user(user_id=interviewer_id)
+                if not dingding_user:
+                    return f"获取access token 失败，没有绑定钉钉账号！"
+                union_id = dingding_user.union_id
+            except Exception as e:
+                raise f"获取access token 失败：{e}"
+    try:
+        # 2. 获取access_token
+        r = await get_redis()
+        access_token_info = await get_user_access_token(interviewer_id, r)
+    except Exception as e:
+        logger.error( f"获取access_toke败：{e}")
+        raise f"获取access_toke败：{e}"
+    return union_id, access_token_info
+
+
+
+
 
 async def get_dingtalk_user(session,state,access_token: str, union_id: str="me"):
     async with httpx.AsyncClient() as client:
@@ -166,7 +199,12 @@ def build_get_calendar_list_url(union_id: str, time_min: datetime, time_max: dat
     return urljoin(DINGTALK_BASE, path)
 
 #获取日程列表
-async def get_calendar_list(union_id: str, access_token: str, time_min: datetime, time_max: datetime):
+async def get_calendar_list(
+        union_id: str,
+        access_token: str,
+        time_min: datetime,
+        time_max: datetime
+)->list[dict[str, Any]]:
     url = build_get_calendar_list_url(union_id, time_min, time_max)
     headers = {
         "x-acs-dingtalk-access-token": access_token
@@ -206,3 +244,42 @@ async def create_calendar(union_id: str, access_token: str, summary: str, start_
         calendar_response.raise_for_status()
         calendar_data = calendar_response.json() or {}
         return calendar_data
+
+
+async def get_user_available_slots(
+    interviewer_id:str,
+    hour_interval:float=1.0,
+    max_days_to_search:int=7,
+    start_time:datetime=datetime.now(),
+    time_delta = 1
+):
+    result = await get_union_id_and_access_token_by_user_id(interviewer_id)
+    # Step 1：获取面试官钉钉日历空闲时间
+    if isinstance(result, str):
+        raise result
+    union_id, access_token_info = result
+
+    # 3. 从钉钉上获取面试官的日程安排
+    try:
+
+        start_datetime=datetime(year=start_time.year, month=start_time.month, day=start_time.day, hour=start_time.hour) + timedelta(days=time_delta)
+        events: list[dict[str, Any]] = await get_calendar_list(
+            union_id= union_id,
+            access_token=cast(str, access_token_info.get("access_token")),
+            time_min=start_datetime,
+            time_max=start_datetime + timedelta(days=max_days_to_search),
+        )
+        busy_slots = [
+            (iso8601_to_datetime_beijing(event['start']['dateTime']),
+             iso8601_to_datetime_beijing(event['end']['dateTime']))
+            for event in events
+        ]
+        available_slots: list[tuple[datetime, datetime]] = find_available_slot(
+            busy_slots,
+            hour_interval=hour_interval,
+            start_date=start_datetime,
+            max_days_to_search=max_days_to_search,
+        )
+    except Exception as e:
+        raise f"获取面试官可用时间失败：{e}"
+    return available_slots

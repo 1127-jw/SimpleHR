@@ -1,4 +1,5 @@
 from langchain.agents.middleware import ModelFallbackMiddleware
+from langchain_core.prompts import ChatPromptTemplate
 
 from app.agents.llms import deepseek_llm, qwen_llm
 from app.schemas.agent_schema import AgentCandidateScoreSchema
@@ -28,14 +29,17 @@ async def scoring_node(state: CandidateRecruitmentState) -> dict:
         response_format=AgentCandidateScoreSchema
     )
 
-    user_prompt_template = PromptTemplate.from_template(SCORE_FOR_CANDIDATE_USER_PROMPT)
-    user_prompt = user_prompt_template.invoke({
+    user_prompt_template = ChatPromptTemplate.from_messages([
+        ("user", SCORE_FOR_CANDIDATE_USER_PROMPT)
+    ])
+
+    messages = user_prompt_template.invoke({
         "candidate": candidate.model_dump_json(),
-        "position": position.model_dump_json()
+        "position": position.model_dump_json(),
     })
 
     response = await score_agent.ainvoke({
-        "messages": [{"role": "user", "content": user_prompt.text}]
+        "messages": messages.to_messages(),
     })
     score_result: AgentCandidateScoreSchema = response["structured_response"]
 
