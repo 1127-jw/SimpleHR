@@ -7,6 +7,7 @@ from app.repository.resume_repo import ResumeRepo, CandidateRepo
 from app.models.user import UserModel
 from app.models.candidate import ResumeModel
 from app.schemas.candidate_schema import TaskInfoSchema, CandidateCreateSchema, CandidateSchema
+from app.core.exceptions import ResumeProcessingError
 from app.tasks.ocr_tasks import ocr_parse_resume_task
 from app.schemas.position_schema import PositionSchema
 from app.schemas.user_schema import UserSH
@@ -50,12 +51,13 @@ async def resume_upload_service(
                 await fp.write(content)
                 content = await file.read(1024)
 
-    except Exception as e:
+    except OSError as e:
         logger.error(f"文件写入失败: {e}")
+        raise ResumeProcessingError(f"简历文件写入失败: {e}") from e
 
 
-    # 3. 如果是word文档，那么就转化成pdf
-    if file_extension == ".doc" or file_extension == ".docx":
+    # 3. 如果是 word 文档，转化为 PDF
+    if file_extension in (".doc", ".docx"):
         pdf_path = file_path.replace(file_extension, ".pdf")
         converter = WordToPdfConverter(
             word_path=file_path,
@@ -65,7 +67,8 @@ async def resume_upload_service(
             await converter.convert()
             file_path = pdf_path
         except Exception as e:
-            logger.error(f"Word转PDF失败：{e}")
+            logger.error(f"Word 转 PDF 失败: {e}")
+            raise ResumeProcessingError(f"Word 转 PDF 失败: {e}") from e
 
     # 4. 将简历数据存储到数据库中
     async with session.begin():

@@ -10,10 +10,12 @@ if sys.platform == "win32":
     import uvicorn.loops.asyncio as _uvicorn_asyncio_loop
     _uvicorn_asyncio_loop.asyncio_loop_factory = lambda use_subprocess=False: asyncio.SelectorEventLoop
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
+from app.core.exceptions import AppException, BusinessException, ExternalServiceError
 
 from app.routers.user_router import router as user_router
 from app.routers.position_router import router as position_router
@@ -26,6 +28,8 @@ from app.core.redis_client import init_redis, close_redis
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.core.logging_config import setup_logging
+    setup_logging(level="INFO")
     await init_redis()
     await MailManager.init(
         imap_host=os.getenv("IMAP_HOST", "imap.163.com"),
@@ -57,6 +61,36 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+# ==================== 全局异常处理器 ====================
+
+@app.exception_handler(BusinessException)
+async def business_exception_handler(request: Request, exc: BusinessException):
+    """业务异常 → HTTP 400。"""
+    return JSONResponse(
+        status_code=400,
+        content={"detail": exc.message, "code": exc.code},
+    )
+
+
+@app.exception_handler(ExternalServiceError)
+async def external_service_exception_handler(request: Request, exc: ExternalServiceError):
+    """第三方服务异常 → HTTP 502。"""
+    return JSONResponse(
+        status_code=502,
+        content={"detail": exc.message, "code": exc.code},
+    )
+
+
+@app.exception_handler(AppException)
+async def app_exception_handler(request: Request, exc: AppException):
+    """兜底应用异常 → HTTP 500。"""
+    return JSONResponse(
+        status_code=500,
+        content={"detail": exc.message, "code": exc.code},
+    )
+
 
 #跨域
 app.add_middleware(

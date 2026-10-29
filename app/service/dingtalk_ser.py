@@ -14,9 +14,10 @@ from app.repository.user_repo import UserRepo
 from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
 from app.core.redis_client import get_redis
+from app.core.exceptions import DingTalkServiceError
 from app.models import DingdingUserModel
 from utils.available_time import find_available_slot
-from utils.time_ISO8601_datatime import datetime_to_iso8601_beijing, iso8601_to_datetime_beijing
+from utils.time_ISO8601_datatime import datetime_to_iso8601_beijing, iso8601_to_datetime_beijing, now_beijing
 
 settings = get_settings()
 
@@ -129,25 +130,36 @@ async def get_user_access_token(
         "state": state
     }
 
-async def get_union_id_and_access_token_by_user_id(interviewer_id:str):
-    """获取面试官钉钉账户的access token"""
+async def get_union_id_and_access_token_by_user_id(interviewer_id: str) -> tuple[str, dict]:
+    """获取面试官钉钉账户的 access_token 和 union_id。
+
+    Returns:
+        (union_id, access_token_info) 元组。
+
+    Raises:
+        DingTalkServiceError: 未绑定钉钉账号或 token 获取失败。
+    """
     async with AsyncSessionFactory() as session:
         async with session.begin():
-            try:
-                user_repo = UserRepo(session)
-                dingding_user: DingdingUserModel | None = await user_repo.get_dingding_user(user_id=interviewer_id)
-                if not dingding_user:
-                    return f"获取access token 失败，没有绑定钉钉账号！"
-                union_id = dingding_user.union_id
-            except Exception as e:
-                raise f"获取access token 失败：{e}"
+            user_repo = UserRepo(session)
+            dingding_user: DingdingUserModel | None = await user_repo.get_dingding_user(
+                user_id=interviewer_id
+            )
+            if not dingding_user:
+                raise DingTalkServiceError(
+                    f"用户 {interviewer_id} 未绑定钉钉账号"
+                )
+            union_id = dingding_user.union_id
+
     try:
-        # 2. 获取access_token
         r = await get_redis()
         access_token_info = await get_user_access_token(interviewer_id, r)
     except Exception as e:
-        logger.error( f"获取access_toke败：{e}")
-        raise f"获取access_toke败：{e}"
+        logger.error(f"获取钉钉 access_token 失败: {e}")
+        raise DingTalkServiceError(
+            f"获取钉钉 access_token 失败: {e}"
+        ) from e
+
     return union_id, access_token_info
 
 
@@ -247,12 +259,14 @@ async def create_calendar(union_id: str, access_token: str, summary: str, start_
 
 
 async def get_user_available_slots(
-    interviewer_id:str,
-    hour_interval:float=1.0,
-    max_days_to_search:int=7,
-    start_time:datetime=datetime.now(),
-    time_delta = 1
+    interviewer_id: str,
+    hour_interval: float = 1.0,
+    max_days_to_search: int = 7,
+    start_time: datetime = None,
+    time_delta=1
 ):
+    if start_time is None:
+        start_time = now_beijing()
     result = await get_union_id_and_access_token_by_user_id(interviewer_id)
     # Step 1：获取面试官钉钉日历空闲时间
     if isinstance(result, str):
@@ -281,5 +295,8 @@ async def get_user_available_slots(
             max_days_to_search=max_days_to_search,
         )
     except Exception as e:
-        raise f"获取面试官可用时间失败：{e}"
+        logger.error(f"获取面试官可用时间失败: {e}")
+        raise DingTalkServiceError(
+            f"获取面试官可用时间失败: {e}"
+        ) from e
     return available_slots

@@ -11,6 +11,7 @@ from app.models.user import UserModel
 from uuid import uuid4
 from app.schemas.candidate_schema import CandidateListSchema, CandidateStatusUpdateSchema, CandidateAIScoreRespSchema
 from loguru import logger
+from utils.time_ISO8601_datatime import now_beijing
 
 from app.schemas.candidate_schema import ResumeUploadRespSchema, ResumePaseSchema, ResumeParseTaskRespSchema, \
     TaskInfoSchema,CandidateCreateSchema
@@ -208,7 +209,7 @@ async def get_7d_candidate(
 ):
     async with session.begin():
         candidate_repo = CandidateRepo(session)
-        now = datetime.now()
+        now = now_beijing()
         end_time = datetime(year=now.year, month=now.month, day=now.day)
         start_time = end_time - timedelta(days=6)
         rows = await candidate_repo.candidate_count(

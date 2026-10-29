@@ -17,6 +17,12 @@ from app.schemas.position_schema import PositionSchema
 from app.schemas.user_schema import UserSH
 from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
+from app.core.exceptions import (
+    DingTalkServiceError,
+    EmailSendError,
+    InterviewSchedulingError,
+    LLMServiceError,
+)
 from app.models import DingdingUserModel
 from app.models.candidate import CandidateStatusEnum
 from app.models.InterviewModel import InterviewResultEnum
@@ -33,7 +39,7 @@ import json
 
 
 from utils.emailbot.mail_manager import get_mail_bot_
-from utils.time_ISO8601_datatime import iso8601_to_datetime_beijing
+from utils.time_ISO8601_datatime import iso8601_to_datetime_beijing, now_beijing, to_naive_beijing
 from utils.available_time import find_available_slot
 
 # from langchain_core.globals import set_debug, set_verbose
@@ -55,17 +61,21 @@ class CandidateAgentState(AgentState):
 
 @tool
 async def score_for_candidate(
-        runtime:ToolRuntime[CandidateAgentState],
+        runtime: ToolRuntime[CandidateAgentState],
 ):
     """
     结合给定的候选人信息和招聘的职位要求信息，
     对候选人的工作经验、技术技能、项目经验、软技能潜力、教育背景等进行评分(最低分0分，满分10分)，
-    并给出总分(综合评分)和优缺点总结
+    并给出总分(综合评分)和优缺点总结。
+
+    阈值从 state 中的 ``score_pass_threshold`` 读取。
     """
 
     candidate: CandidateSchema = runtime.state["candidate"]
     position: PositionSchema = runtime.state["position"]
+    threshold = runtime.state.get("score_pass_threshold", 7)
 
+    # 每次调用创建独立 Agent（原设计，保持不变）
     score_agent = create_agent(
         model=qwen_llm,
         middleware=[
@@ -78,82 +88,100 @@ async def score_for_candidate(
     )
 
     score_template = PromptTemplate.from_template(SCORE_FOR_CANDIDATE_USER_PROMPT)
-    # 将 ORM 模型转为 Pydantic Schema，再序列化
     candidate_schema = CandidateSchema.model_validate(candidate)
     position_schema = PositionSchema.model_validate(position)
-    prompt = score_template.format(position=position_schema.model_dump_json(), candidate=candidate_schema.model_dump_json())
-
-    res = await score_agent.ainvoke(
-        {"messages": [{"role": "user", "content": prompt}]}
+    prompt = score_template.format(
+        position=position_schema.model_dump_json(),
+        candidate=candidate_schema.model_dump_json(),
     )
+
+    try:
+        res = await score_agent.ainvoke(
+            {"messages": [{"role": "user", "content": prompt}]}
+        )
+    except Exception as e:
+        raise LLMServiceError(f"AI 评分模型调用失败: {e}") from e
+
     candidate_score: AgentCandidateScoreSchema = res["structured_response"]
-    #将候选人得分插入到数据库中
+
+    # 将评分结果写入数据库
     async with AsyncSessionFactory() as session:
         async with session.begin():
-            #将得分插入数据库中
-            try:
-                score_repo = CandidateAIScoreRepo(session)
-                await score_repo.create_candidate_score(
-                    candidate_id=candidate.id,
-                    candidate_score_dict=candidate_score.model_dump(),
-                )
-                # 判断是否符合要求（总分>7）,将候选人状态修改为AI_PASS,否则为AI_FAILED
-                candidate_repo = CandidateRepo(session)
-                if candidate_score.overall_score > 7:
-                    await candidate_repo.update_candidate_status(candidate_id=candidate.id,
-                                                                 status=CandidateStatusEnum.AI_FILTER_PASSED)
-                else:
-                    await candidate_repo.update_candidate_status(candidate_id=candidate.id,
-                                                                 status=CandidateStatusEnum.AI_FILTER_FAILED)
-            except Exception as e:
-                logger.error(f"AI评分写入数据库失败: {e}")
-                return f"ai评分写入db失败，错误信息为{e}"
-    return f"ai评分工具执行成功，该候选人的评分为{candidate_score.model_dump_json()}"
+            score_repo = CandidateAIScoreRepo(session)
+            await score_repo.create_candidate_score(
+                candidate_id=candidate.id,
+                candidate_score_dict=candidate_score.model_dump(),
+            )
+            candidate_repo = CandidateRepo(session)
+            status = (
+                CandidateStatusEnum.AI_FILTER_PASSED
+                if candidate_score.overall_score > threshold
+                else CandidateStatusEnum.AI_FILTER_FAILED
+            )
+            await candidate_repo.update_candidate_status(
+                candidate_id=candidate.id, status=status
+            )
+
+    return (
+        f"AI 评分完成，总分 {candidate_score.overall_score}，"
+        f"{'通过' if candidate_score.overall_score > threshold else '未通过'}"
+    )
+
+
+class DingTalkTokenError(DingTalkServiceError):
+    """钉钉 token 获取失败。"""
+    pass
 
 
 async def get_access_token(
-    interviewer:UserSH
-):
-    """获取面试官钉钉账户的access token"""
+    interviewer: UserSH,
+) -> tuple[str, dict]:
+    """获取面试官钉钉账户的 access token。
+
+    Returns:
+        (union_id, access_token_info) 元组。
+
+    Raises:
+        DingTalkTokenError: 未绑定钉钉账号或 token 获取失败。
+    """
     async with AsyncSessionFactory() as session:
         async with session.begin():
-            try:
-                user_repo = UserRepo(session)
-                dingding_user: DingdingUserModel | None = await user_repo.get_dingding_user(user_id=interviewer.id)
-                if not dingding_user:
-                    return f"获取access token 失败，没有绑定钉钉账号！"
-                union_id = dingding_user.union_id
-            except Exception as e:
-                return f"获取候选人可用时间失败：{e}"
+            user_repo = UserRepo(session)
+            dingding_user: DingdingUserModel | None = await user_repo.get_dingding_user(
+                user_id=interviewer.id
+            )
+            if not dingding_user:
+                raise DingTalkTokenError(
+                    f"用户 {interviewer.id} 未绑定钉钉账号"
+                )
+            union_id = dingding_user.union_id
+
     try:
-        # 2. 获取access_token
         r = await get_redis()
         access_token_info = await get_user_access_token(interviewer.id, r)
     except Exception as e:
-        logger.error(e)
-        return f"获取access_toke败：{e}"
+        logger.error(f"获取钉钉 access_token 失败: {e}")
+        raise DingTalkTokenError(f"获取钉钉 access_token 失败: {e}") from e
+
     return union_id, access_token_info
 
 
 @tool
 async def get_interviewer_available_slot(
-        runtime:ToolRuntime[CandidateAgentState],
+        runtime: ToolRuntime[CandidateAgentState],
 ):
     """
-       根据职位信息，获取面试官可用的面试时间。
-       """
+    根据职位信息，获取面试官可用的面试时间。
+    """
     interviewer: UserSH = runtime.state['interviewer']
-    # 获取该用户的钉钉账号
-    result = await get_access_token(interviewer)
-    # 错误时返回字符串，成功时返回元组
-    if isinstance(result, str):
-        return result
-    union_id, access_token_info = result
+    union_id, access_token_info = await get_access_token(interviewer)
 
-    # 3. 从钉钉上获取面试官的日程安排
+    now = now_beijing()
+    tomorrow_nine = datetime(
+        year=now.year, month=now.month, day=now.day, hour=9
+    ) + timedelta(days=1)
+
     try:
-        now = datetime.now()
-        tomorrow_nine = datetime(year=now.year, month=now.month, day=now.day, hour=9) + timedelta(days=1)
         events: list[dict[str, Any]] = await get_calendar_list(
             union_id=cast(str, union_id),
             access_token=cast(str, access_token_info.get("access_token")),
@@ -161,30 +189,41 @@ async def get_interviewer_available_slot(
             time_max=tomorrow_nine + timedelta(days=7),
         )
         busy_slots = [
-            (iso8601_to_datetime_beijing(event['start']['dateTime']), iso8601_to_datetime_beijing(event['end']['dateTime']))
+            (
+                iso8601_to_datetime_beijing(event['start']['dateTime']),
+                iso8601_to_datetime_beijing(event['end']['dateTime']),
+            )
             for event in events
         ]
         available_slots: list[tuple[datetime, datetime]] = find_available_slot(
-            busy_slots,
-            start_date=tomorrow_nine
+            busy_slots, start_date=tomorrow_nine
         )
-        if len(available_slots) == 0:
-            return f"获取面试官可用时间失败：7天内没有空闲时间！"
-        available_times = [(slot[0].strftime("%Y-%m-%d %H:%M"), slot[1].strftime("%Y-%m-%d %H:%M")) for slot in available_slots]
-        return f"找到面试官可用的时间：{json.dumps(available_times, ensure_ascii=False)}"
-
+    except DingTalkServiceError:
+        raise
     except Exception as e:
-        return f"获取面试官可用时间失败：{e}"
+        logger.error(f"获取面试官日历失败: {e}")
+        raise DingTalkServiceError(f"获取面试官日历失败: {e}") from e
+
+    if not available_slots:
+        raise InterviewSchedulingError("面试官 7 天内无空闲时间")
+
+    available_times = [
+        (slot[0].strftime("%Y-%m-%d %H:%M"), slot[1].strftime("%Y-%m-%d %H:%M"))
+        for slot in available_slots
+    ]
+    return f"找到面试官可用的时间：{json.dumps(available_times, ensure_ascii=False)}"
 
 
 @tool
 async def send_interview_email(
-    runtime:ToolRuntime[CandidateAgentState],
-    interview_datetime_str:str,
+    runtime: ToolRuntime[CandidateAgentState],
+    interview_datetime_str: str,
 ):
     """
-    给候选人发送面试时间邀请（并非最终面试时间，后续可能还需要通过邮件来和候选人协商最终面试时间）
-    :param interview_datetime_str: 面试时间的字符串
+    给候选人发送面试时间邀请（并非最终面试时间，后续可能还需要通过邮件来和候选人协商最终面试时间）。
+
+    Args:
+        interview_datetime_str: 面试时间的字符串。
     """
     candidate = runtime.state['candidate']
     position = runtime.state['position']
@@ -209,10 +248,10 @@ async def send_interview_email(
             text=body,
         )
     except Exception as e:
-        logger.error(e)
-        return f"给候选人发送邮件失败：{e}"
+        logger.error(f"发送面试邀请邮件失败: {e}")
+        raise EmailSendError(f"发送面试邀请邮件失败: {e}") from e
 
-    return f"给候选人发送面试邀请邮件成功！面试时间初步确定为：{interview_datetime_str}"
+    return f"面试邀请邮件已发送，初步面试时间：{interview_datetime_str}"
 
 
 @tool
@@ -221,12 +260,14 @@ async def confirm_interview_time(
     runtime: ToolRuntime[CandidateAgentState],
 ):
     """
-    确认最终的面试时间。这个工具会做以下四件事：
-    * 通过邮件，发送最终确认面试的时间给候选人
-    * 给面试官的钉钉创建一个面试的日程安排
-    * 在系统中创建一个面试预约记录
-    # 在系统中修改候选人的状态为待面试
-    :param interview_datetime_str: 面试时间，ISO8601格式的字符串
+    确认最终的面试时间。依次执行：
+    1. 给候选人发送面试确认邮件
+    2. 给面试官创建钉钉日程
+    3. 在系统中创建面试预约记录
+    4. 修改候选人状态为待面试
+
+    Args:
+        interview_datetime_str: 面试时间，ISO8601 格式字符串。
     """
     position = runtime.state['position']
     candidate = runtime.state['candidate']
@@ -234,12 +275,13 @@ async def confirm_interview_time(
 
     try:
         interview_datetime: datetime = iso8601_to_datetime_beijing(interview_datetime_str)
-        # 由于后面存储数据库，不能在日期中带时区，所以这里先处理一下
-        if interview_datetime.tzinfo is not None:
-            interview_datetime_without_tz = interview_datetime.astimezone(None).replace(tzinfo=None)
+        interview_datetime_without_tz = to_naive_beijing(interview_datetime)
     except Exception as e:
-        return f"{interview_datetime_str}格式化失败！{e}"
+        raise InterviewSchedulingError(
+            f"面试时间格式化失败: {interview_datetime_str}"
+        ) from e
 
+    # 1. 发送确认邮件
     subject = "【知了课堂】面试时间确定"
     body = f"""
 "尊敬的{candidate.name}，
@@ -255,16 +297,14 @@ async def confirm_interview_time(
             text=body,
         )
     except Exception as e:
-        logger.error(e)
-        return f"给候选人发送邮件失败：{e}"
+        logger.error(f"发送面试确认邮件失败: {e}")
+        raise EmailSendError(f"发送面试确认邮件失败: {e}") from e
 
-    result = await get_access_token(interviewer)
-    # 错误时返回字符串，成功时返回元组
-    if isinstance(result, str):
-        return result
-    union_id, access_token_info = result
+    # 2. 获取钉钉 token
+    union_id, access_token_info = await get_access_token(interviewer)
     access_token = access_token_info.get("access_token")
 
+    # 3. 创建钉钉日程
     try:
         end_datetime: datetime = interview_datetime + timedelta(hours=1)
         await create_calendar(
@@ -274,37 +314,38 @@ async def confirm_interview_time(
             start_datetime=interview_datetime,
             end_datetime=end_datetime,
         )
+    except DingTalkServiceError:
+        raise
     except Exception as e:
-        return f"创建钉钉面试日程安排失败，错误信息：\n{e}"
+        logger.error(f"创建钉钉日程失败: {e}")
+        raise DingTalkServiceError(f"创建钉钉日程失败: {e}") from e
 
-
+    # 4. 创建面试记录 + 更新候选人状态
     try:
         async with AsyncSessionFactory() as session:
             async with session.begin():
                 interview_repo = InterviewRepo(session)
-                # 3. 在数据库中创建一个面试预约记录
                 await interview_repo.create_interview({
-                    # 面试时间因为是存储到postgresql数据库中，现在是只能存储没有带时区的日期
                     "scheduled_time": interview_datetime_without_tz,
                     "result": InterviewResultEnum.PENDING,
                     "candidate_id": candidate.id,
                     "interviewer_id": interviewer.id,
                 })
-                # 4. 在数据库中修改候选人的状态为待面试
                 candidate_repo = CandidateRepo(session)
                 await candidate_repo.update_candidate_status(
                     candidate_id=candidate.id,
                     status=CandidateStatusEnum.WAITING_FOR_INTERVIEW,
                 )
     except Exception as e:
-        return f"在系统中创建面试预约记录和候选人状态修改失败！{e}"
+        logger.error(f"创建面试记录失败: {e}")
+        raise InterviewSchedulingError(
+            f"创建面试记录失败: {e}"
+        ) from e
 
-    return f"""
-    * 给候选人发送面试时间执行成功！
-    * 给面试官创建钉钉日程安排成功！
-    * 在系统中创建面试预约成功！
-    * 在系统中修改候选人状态为待面试成功！
-    """
+    return (
+        "面试时间确认完成：已发送确认邮件、"
+        "创建钉钉日程、创建面试记录、更新候选人状态"
+    )
 
 
 @tool
@@ -312,7 +353,10 @@ async def refuse_interview(
     runtime: ToolRuntime[CandidateAgentState],
 ):
     """
-    如果候选人拒绝了面试，那么调用该工具来更新候选人状态为拒绝面试
+    候选人拒绝面试时调用，更新候选人状态为拒绝面试。
+
+    Raises:
+        InterviewSchedulingError: 更新候选人状态失败。
     """
     candidate = runtime.state['candidate']
     try:
@@ -323,9 +367,12 @@ async def refuse_interview(
                     candidate_id=candidate.id,
                     status=CandidateStatusEnum.REFUSED_INTERVIEW,
                 )
-        return "已修改候选人状态为拒绝面试！"
     except Exception as e:
-        return f"修改候选人状态为拒绝面试失败！"
+        logger.error(f"更新候选人拒绝状态失败: {e}")
+        raise InterviewSchedulingError(
+            f"更新候选人 {candidate.id} 拒绝状态失败: {e}"
+        ) from e
+    return "已更新候选人状态为拒绝面试"
 
 
 @tool
@@ -333,7 +380,7 @@ def get_current_time() -> str:
     """
     获取当前时间（北京时间）：年月日、时分秒、星期几、当月第几天
     """
-    now_bj = datetime.now()
+    now_bj = now_beijing()
 
     weekday_map = {
         0: "星期一",

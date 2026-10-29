@@ -1,86 +1,126 @@
+"""
+时区处理工具模块 —— 全项目统一时区策略
+
+策略约定：
+1. 所有业务时间均为北京时间（UTC+8），内部使用 timezone-aware datetime
+2. 数据库存储使用 naive datetime（已转为北京时间后剥离时区信息）
+3. JWT/认证相关时间使用 UTC（保持不变）
+4. 外部 API（钉钉）使用 ISO-8601 格式字符串 + Asia/Shanghai 时区标识
+
+使用方式：
+    from utils.time_ISO8601_datatime import BEIJING_TZ, now_beijing, to_naive_beijing, to_iso8601, from_iso8601
+
+    # 获取当前北京时间（带时区）
+    now = now_beijing()
+
+    # 存入数据库前：转为 naive 北京时间
+    db_value = to_naive_beijing(some_datetime)
+
+    # 传给钉钉 API
+    iso_str = to_iso8601(some_datetime)
+
+    # 从钉钉 API 解析
+    dt = from_iso8601(iso_str)
+"""
 from datetime import datetime, timezone, timedelta
 import re
 
+# ============================================================
+# 全局唯一时区常量 —— 整个项目共享，不再在每个函数内部创建
+# ============================================================
+BEIJING_TZ = timezone(timedelta(hours=8), name="Asia/Shanghai")
+"""北京时间时区（UTC+8），全项目统一使用"""
 
-def datetime_to_iso8601_beijing(dt: datetime) -> str:
-    """
-    将datetime对象转换为ISO-8601格式字符串（北京时间，UTC+8）
-    参数:
-        dt: datetime对象，可以是naive或aware datetime
-    返回:
-        ISO-8601格式字符串，如：2022-11-27T00:00:00+08:00
-    """
-    # 定义北京时区（UTC+8）
-    # timedelta(hours=8)：创建一个表示“8小时”的时间差对象。
-    # timezone(...)：datetime.timezone类接收一个timedelta作为参数，生成对应的时区信息。
-    # 整体含义：表示比协调世界时（UTC）快8小时的时区，即UTC + 8。
-    beijing_tz = timezone(timedelta(hours=8),name="Asia/Shanghai")
 
-    # 如果datetime是naive（没有时区信息），假设它是本地时间并转换为UTC+8
+# ============================================================
+# 辅助函数
+# ============================================================
+
+def now_beijing() -> datetime:
+    """获取当前北京时间（timezone-aware）"""
+    return datetime.now(BEIJING_TZ)
+
+
+def to_naive_beijing(dt: datetime) -> datetime:
+    """
+    将任意 datetime 转为 naive 北京时间（用于数据库存储）。
+
+    处理逻辑：
+    1. 如果是 naive datetime → 假设已是北京时间，直接剥离时区（不变数值）
+    2. 如果是 aware datetime → 先转为北京时间，再剥离时区
+
+    这确保存入 PostgreSQL 的 DateTime 列始终是北京时间数值。
+    """
+    if dt is None:
+        return None
     if dt.tzinfo is None:
-        # 将naive datetime转换为aware datetime（UTC+8）
-        dt_beijing = dt.replace(tzinfo=beijing_tz)
+        return dt.replace(tzinfo=None)
+    return dt.astimezone(BEIJING_TZ).replace(tzinfo=None)
+
+
+def to_iso8601(dt: datetime) -> str:
+    """
+    将 datetime 转为 ISO-8601 格式字符串（北京时间，带 +08:00 偏移）。
+
+    用于：钉钉 API 调用、邮件中的时间展示、日志记录。
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        # naive datetime 视为北京时间
+        dt = dt.replace(tzinfo=BEIJING_TZ)
     else:
-        # 如果datetime已经有时区信息，转换为UTC+8
-        dt_beijing = dt.astimezone(beijing_tz)
-
-    # 转换为ISO-8601格式字符串
-    # 去除微秒，确保格式符合 API 要求
-    return dt_beijing.replace(microsecond=0).isoformat()
+        dt = dt.astimezone(BEIJING_TZ)
+    return dt.replace(microsecond=0).isoformat()
 
 
-def iso8601_to_datetime_beijing(iso_str: str) -> datetime:
+def from_iso8601(iso_str: str) -> datetime:
     """
-    将ISO-8601格式字符串转换为北京时间（UTC+8）的datetime对象
+    将 ISO-8601 格式字符串解析为北京时间 datetime（timezone-aware）。
 
-    参数:
-        iso_str: ISO-8601格式字符串，支持以下格式：
-                 - 带时区偏移: "2022-11-27T08:30:00+08:00"
-                 - UTC标记: "2022-11-27T00:30:00Z"
-                 - 无时区（naive）: "2022-11-27T08:30:00"（视为北京时间）
-
-    返回:
-        带时区信息的datetime对象（固定为UTC+8）
-
-    异常:
-        ValueError: 当输入字符串格式无效时抛出
+    支持格式：
+    - 带时区偏移: "2022-11-27T08:30:00+08:00"
+    - UTC 标记: "2022-11-27T00:30:00Z"
+    - 无时区（naive）: "2022-11-27T08:30:00"（视为北京时间）
     """
-    # 1. 标准化输入：将末尾的'Z'替换为'+00:00'以便解析
+    if iso_str is None:
+        return None
+
     normalized_str = iso_str.strip()
     if normalized_str.endswith('Z'):
         normalized_str = normalized_str[:-1] + '+00:00'
 
-    # 2. 处理微秒部分可能缺少补零的情况（Python 3.11+ 支持，但为兼容性处理）
-    # 例如: "2022-11-27T08:30:00.1+08:00" -> 需要补零到6位
-    # 使用正则匹配微秒部分并补零
+    # 处理微秒部分可能缺少补零的情况
     normalized_str = re.sub(
         r'(\.\d{1,6})(?![\d:])',
         lambda m: m.group(1) + '0' * (6 - len(m.group(1)) + 1),
         normalized_str
     )
 
-    # 3. 解析ISO字符串
     try:
         dt = datetime.fromisoformat(normalized_str)
-    except ValueError as e:
-        # 尝试更宽松的解析（处理空格分隔等情况）
+    except ValueError:
         try:
-            # 替换空格为'T'以支持"2022-11-27 08:30:00"格式
             if ' ' in normalized_str and 'T' not in normalized_str:
                 normalized_str = normalized_str.replace(' ', 'T', 1)
             dt = datetime.fromisoformat(normalized_str)
         except Exception:
-            raise ValueError(f"无法解析ISO 8601字符串: '{iso_str}'。错误: {e}")
+            raise ValueError(f"无法解析 ISO 8601 字符串: '{iso_str}'")
 
-    # 4. 定义北京时区
-    beijing_tz = timezone(timedelta(hours=8))
-
-    # 5. 时区处理
     if dt.tzinfo is None:
-        # naive datetime：视为北京时间（不改变时间数值，仅附加时区）
-        dt = dt.replace(tzinfo=beijing_tz)
-    else:
-        # aware datetime：转换为北京时间（保持同一时刻，调整时间数值）
-        dt = dt.astimezone(beijing_tz)
+        return dt.replace(tzinfo=BEIJING_TZ)
+    return dt.astimezone(BEIJING_TZ)
 
-    return dt
+
+# ============================================================
+# 向后兼容的别名（保持旧代码可用）
+# ============================================================
+
+def datetime_to_iso8601_beijing(dt: datetime) -> str:
+    """向后兼容别名，等同于 to_iso8601"""
+    return to_iso8601(dt)
+
+
+def iso8601_to_datetime_beijing(iso_str: str) -> datetime:
+    """向后兼容别名，等同于 from_iso8601"""
+    return from_iso8601(iso_str)

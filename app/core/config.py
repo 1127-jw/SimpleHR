@@ -101,6 +101,33 @@ class Settings(BaseSettings):
 
     DASHSCOPE_API_KEY:str=""
 
+    # ---------- agent/graph ----------
+    GRAPH_OPEN:bool = False
+
+    # ---------- 招聘流程阈值 ----------
+    SCORE_PASS_THRESHOLD: int = 7          # AI 评分通过阈值（overall_score > 该值视为通过）
+    MAX_NEGOTIATION_ROUNDS: int = 3        # 面试时间协商轮次上限
+    EMAIL_REPLY_TIMEOUT: str = "TIMEOUT"   # interrupt 超时恢复标记
+
+    # ---------- 面试时间窗口（24小时制） ----------
+    AM_WINDOW_START_HOUR: int = 9          # 上午面试窗口开始
+    AM_WINDOW_END_HOUR: int = 12           # 上午面试窗口结束
+    PM_WINDOW_START_HOUR: int = 14         # 下午面试窗口开始
+    PM_WINDOW_END_HOUR: int = 18           # 下午面试窗口结束
+
+    @computed_field
+    @property
+    def am_window(self) -> tuple:
+        """上午面试窗口（time 元组）。"""
+        from datetime import time
+        return (time(self.AM_WINDOW_START_HOUR, 0), time(self.AM_WINDOW_END_HOUR, 0))
+
+    @computed_field
+    @property
+    def pm_window(self) -> tuple:
+        """下午面试窗口（time 元组）。"""
+        from datetime import time
+        return (time(self.PM_WINDOW_START_HOUR, 0), time(self.PM_WINDOW_END_HOUR, 0))
 
     @computed_field
     @property
