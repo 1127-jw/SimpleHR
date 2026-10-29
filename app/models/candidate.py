@@ -32,6 +32,8 @@ class CandidateStatusEnum(StrEnum):
     HIRED = "已入职"
     # 9. 已拒绝
     REJECTED = "已拒绝"
+    # 10. 协商超时（超过协商轮次上限或候选人回复超时）
+    NEGOTIATION_EXPIRED = "协商超时"
 
 
 class GenderEnum(StrEnum):

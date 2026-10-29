@@ -101,6 +101,8 @@ class Settings(BaseSettings):
 
     DASHSCOPE_API_KEY:str=""
 
+    # ---------- agent/graph ----------
+    GRAPH_OPEN:bool = False
 
     @computed_field
     @property

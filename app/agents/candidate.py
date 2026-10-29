@@ -33,7 +33,7 @@ import json
 
 
 from utils.emailbot.mail_manager import get_mail_bot_
-from utils.time_ISO8601_datatime import iso8601_to_datetime_beijing
+from utils.time_ISO8601_datatime import iso8601_to_datetime_beijing, now_beijing, to_naive_beijing
 from utils.available_time import find_available_slot
 
 # from langchain_core.globals import set_debug, set_verbose
@@ -152,7 +152,7 @@ async def get_interviewer_available_slot(
 
     # 3. 从钉钉上获取面试官的日程安排
     try:
-        now = datetime.now()
+        now = now_beijing()
         tomorrow_nine = datetime(year=now.year, month=now.month, day=now.day, hour=9) + timedelta(days=1)
         events: list[dict[str, Any]] = await get_calendar_list(
             union_id=cast(str, union_id),
@@ -234,9 +234,8 @@ async def confirm_interview_time(
 
     try:
         interview_datetime: datetime = iso8601_to_datetime_beijing(interview_datetime_str)
-        # 由于后面存储数据库，不能在日期中带时区，所以这里先处理一下
-        if interview_datetime.tzinfo is not None:
-            interview_datetime_without_tz = interview_datetime.astimezone(None).replace(tzinfo=None)
+        # 统一使用 to_naive_beijing 剥离时区（确保存入 DB 的是北京时间数值）
+        interview_datetime_without_tz = to_naive_beijing(interview_datetime)
     except Exception as e:
         return f"{interview_datetime_str}格式化失败！{e}"
 
@@ -333,7 +332,7 @@ def get_current_time() -> str:
     """
     获取当前时间（北京时间）：年月日、时分秒、星期几、当月第几天
     """
-    now_bj = datetime.now()
+    now_bj = now_beijing()
 
     weekday_map = {
         0: "星期一",

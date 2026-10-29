@@ -16,7 +16,7 @@ from app.core.db import AsyncSessionFactory
 from app.core.redis_client import get_redis
 from app.models import DingdingUserModel
 from utils.available_time import find_available_slot
-from utils.time_ISO8601_datatime import datetime_to_iso8601_beijing, iso8601_to_datetime_beijing
+from utils.time_ISO8601_datatime import datetime_to_iso8601_beijing, iso8601_to_datetime_beijing, now_beijing
 
 settings = get_settings()
 
@@ -247,12 +247,14 @@ async def create_calendar(union_id: str, access_token: str, summary: str, start_
 
 
 async def get_user_available_slots(
-    interviewer_id:str,
-    hour_interval:float=1.0,
-    max_days_to_search:int=7,
-    start_time:datetime=datetime.now(),
-    time_delta = 1
+    interviewer_id: str,
+    hour_interval: float = 1.0,
+    max_days_to_search: int = 7,
+    start_time: datetime = None,
+    time_delta=1
 ):
+    if start_time is None:
+        start_time = now_beijing()
     result = await get_union_id_and_access_token_by_user_id(interviewer_id)
     # Step 1：获取面试官钉钉日历空闲时间
     if isinstance(result, str):

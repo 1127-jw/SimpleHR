@@ -1,13 +1,30 @@
+from langchain.agents import create_agent
 from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain_core.prompts import ChatPromptTemplate
 
 from app.agents.llms import deepseek_llm, qwen_llm
-from app.schemas.agent_schema import AgentCandidateScoreSchema
+from app.agents.prompts import (
+    SCORE_FOR_CANDIDATE_SYSTEM_PROMPT,
+    SCORE_FOR_CANDIDATE_USER_PROMPT,
+)
 from app.core.db import AsyncSessionFactory
 from app.models.candidate import CandidateStatusEnum
 from app.repository.resume_repo import CandidateAIScoreRepo, CandidateRepo
-from app.workflow.candidate_state import CandidateRecruitmentState
-from langchain.agents import create_agent
+from app.schemas.agent_schema import AgentCandidateScoreSchema
+from app.workflow.candidate_state import CandidateRecruitmentState, SCORE_PASS_THRESHOLD
+
+# 模块级单例：避免每次调用 scoring_node 都重建 Agent（与 check_availability_node 的 _proposed_time_agent 一致）
+_score_agent = create_agent(
+    model=deepseek_llm,
+    system_prompt=SCORE_FOR_CANDIDATE_SYSTEM_PROMPT,
+    middleware=[ModelFallbackMiddleware(first_model=qwen_llm)],
+    response_format=AgentCandidateScoreSchema,
+)
+
+_score_user_prompt_template = ChatPromptTemplate.from_messages([
+    ("user", SCORE_FOR_CANDIDATE_USER_PROMPT)
+])
+
 
 async def scoring_node(state: CandidateRecruitmentState) -> dict:
     """
@@ -15,30 +32,15 @@ async def scoring_node(state: CandidateRecruitmentState) -> dict:
     复用 agents/candidate.py L82-L133 的 score_for_candidate 工具逻辑，
     但将其从"工具"提升为"图节点"，使评分成为显式流程步骤。
     """
-    candidate = state.candidate
-    position = state.position
+    candidate = state["candidate"]
+    position = state["position"]
 
-    # 复用 agents/prompts.py L10-L52 的评分 prompt
-    from agents.prompts import SCORE_FOR_CANDIDATE_SYSTEM_PROMPT, SCORE_FOR_CANDIDATE_USER_PROMPT
-    from langchain_core.prompts import PromptTemplate
-
-    score_agent = create_agent(
-        model=deepseek_llm,
-        system_prompt=SCORE_FOR_CANDIDATE_SYSTEM_PROMPT,
-        middleware=[ModelFallbackMiddleware(first_model=qwen_llm)],
-        response_format=AgentCandidateScoreSchema
-    )
-
-    user_prompt_template = ChatPromptTemplate.from_messages([
-        ("user", SCORE_FOR_CANDIDATE_USER_PROMPT)
-    ])
-
-    messages = user_prompt_template.invoke({
+    messages = _score_user_prompt_template.invoke({
         "candidate": candidate.model_dump_json(),
         "position": position.model_dump_json(),
     })
 
-    response = await score_agent.ainvoke({
+    response = await _score_agent.ainvoke({
         "messages": messages.to_messages(),
     })
     score_result: AgentCandidateScoreSchema = response["structured_response"]
@@ -52,15 +54,17 @@ async def scoring_node(state: CandidateRecruitmentState) -> dict:
                 candidate_id=candidate.id,
                 candidate_score_dict=score_result.model_dump()
             )
-            status = (CandidateStatusEnum.AI_FILTER_PASSED
-                      if score_result.overall_score > 8
-                      else CandidateStatusEnum.AI_FILTER_FAILED)
+            status = (
+                CandidateStatusEnum.AI_FILTER_PASSED
+                if score_result.overall_score > SCORE_PASS_THRESHOLD
+                else CandidateStatusEnum.AI_FILTER_FAILED
+            )
             await candidate_repo.update_candidate_status(
                 candidate_id=candidate.id, status=status
             )
 
     # 根据评分决定下一阶段
-    next_stage = "email_invite" if score_result.overall_score > 8 else "rejected"
+    next_stage = "email_invite" if score_result.overall_score > SCORE_PASS_THRESHOLD else "rejected"
 
     return {
         "score_result": score_result,
