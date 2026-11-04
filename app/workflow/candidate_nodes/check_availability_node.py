@@ -13,6 +13,7 @@ from app.core.exceptions import (
     EmailSendError,
     NegotiationError,
 )
+from app.workflow.candidate_state import CandidateRecruitmentState
 from app.workflow.error_handler import node_error_wrapper
 from app.service.dingtalk_ser import get_user_available_slots
 from datetime import datetime, timedelta, time
@@ -20,7 +21,6 @@ from datetime import datetime, timedelta, time
 from app.agents.llms import deepseek_llm, qwen_llm
 from pydantic import BaseModel, Field
 
-from utils.emailbot.mail_manager import get_mail_bot_
 from utils.time_ISO8601_datatime import BEIJING_TZ, now_beijing
 
 settings = get_settings()
@@ -186,6 +186,7 @@ async def can_not_find_available_time(state: CandidateRecruitmentState) -> dict:
         cid, round_num,
     )
 
+    from utils.emailbot.mail_manager import get_mail_bot_
     email_bot = get_mail_bot_()
     subject = "面试时间调整"
     body = "您提出的时间面试官暂不可用，请选择其他具体时间。"

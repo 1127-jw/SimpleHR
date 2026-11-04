@@ -89,9 +89,9 @@ async def notify(email: ParsedEmail, rule) -> None:
         if not candidate_schema:
             logger.warning("未找到对应的候选人: {}", email.from_.address)
             return
-        if candidate_schema.status != CandidateStatusEnum.AI_FILTER_PASSED:
-            logger.warning("候选人未通过ai筛选")
-            return
+        # if candidate_schema.status != CandidateStatusEnum.AI_FILTER_PASSED:
+        #     logger.warning("候选人未通过ai筛选")
+        #     return
         if not graph:
             async with CandidateProcessAgent(
                 candidate=candidate_schema,

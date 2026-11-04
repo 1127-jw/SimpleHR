@@ -30,10 +30,9 @@ async def _mark_processing_error(candidate_id: str, error_msg: str) -> None:
                 )
         logger.info(f"候选人 {candidate_id} 已标记为处理异常")
     except Exception as e:
-        logger.critical(
-            f"标记候选人 {candidate_id} 处理异常状态失败: {e}",
-            exc_info=True,
-        )
+                logger.opt(exception=True).critical(
+                    f"标记候选人 {candidate_id} 处理异常状态失败: {e}"
+                )
 
 
 async def run_candidate_agent(
@@ -90,10 +89,8 @@ async def run_candidate_agent(
             return res
         except (ExternalServiceError, AppException) as e:
             # 注意：不 re-raise！BackgroundTasks 会吞掉异常，raise 毫无意义。
-            logger.error(
-                "[agent_task] candidate_id=%s | infra_error=%s | code=%s | trace=%s",
-                candidate.id, e.message, e.code,
-                exc_info=True,
+            logger.opt(exception=True).error(
+                f"[agent_task] candidate_id={candidate.id} | infra_error={e.message} | code={e.code}"
             )
             await _mark_processing_error(candidate.id, e.message)
             return None
@@ -101,6 +98,10 @@ async def run_candidate_agent(
         # 图模式：使用 LangGraph 状态图
         try:
             async with get_checkpointer() as checkpointer:
+                # 启动新流程前清除旧的 checkpoint，避免重放历史错误状态
+                # 注意：notify.py 中通过 Command(resume=...) 恢复流程时不受影响
+                await checkpointer.adelete_thread(candidate.email)
+
                 candidate_graph = build_candidate_graph(
                     checkpointer,
                     score_pass_threshold=score_pass_threshold,
@@ -123,24 +124,20 @@ async def run_candidate_agent(
             if final_stage == "error":
                 error_msg = res.get("error_message", "未知错误")
                 logger.warning(
-                    "[agent_task] candidate_id=%s | final_stage=error | error=%s",
-                    candidate.id, error_msg,
+                    f"[agent_task] candidate_id={candidate.id} | final_stage=error | error={error_msg}"
                 )
                 # 注意：error_node 已经更新了候选人状态，这里只需记录日志
             else:
                 logger.info(
-                    "[agent_task] candidate_id=%s | final_stage=%s | success",
-                    candidate.id, final_stage,
+                    f"[agent_task] candidate_id={candidate.id} | final_stage={final_stage} | success"
                 )
 
             return res
 
         except (ExternalServiceError, AppException) as e:
             # 注意：不 re-raise！BackgroundTasks 会吞掉异常，raise 毫无意义。
-            logger.error(
-                "[agent_task] candidate_id=%s | infra_error=%s | code=%s | trace=%s",
-                candidate.id, e.message, e.code,
-                exc_info=True,
+            logger.opt(exception=True).error(
+                f"[agent_task] candidate_id={candidate.id} | infra_error={e.message} | code={e.code}"
             )
             await _mark_processing_error(candidate.id, e.message)
             return None

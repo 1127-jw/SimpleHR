@@ -38,7 +38,6 @@ from datetime import datetime, timedelta
 import json
 
 
-from utils.emailbot.mail_manager import get_mail_bot_
 from utils.time_ISO8601_datatime import iso8601_to_datetime_beijing, now_beijing, to_naive_beijing
 from utils.available_time import find_available_slot
 
@@ -228,6 +227,7 @@ async def send_interview_email(
     candidate = runtime.state['candidate']
     position = runtime.state['position']
 
+    from utils.emailbot.mail_manager import get_mail_bot_
     email_bot = get_mail_bot_()
 
     subject = "【知了课堂】面试邀请-协商面试时间"
@@ -289,6 +289,7 @@ async def confirm_interview_time(
 {interview_datetime_str}
 请您准时参加面试。该邮件无需再回复。谢谢！
 """
+    from utils.emailbot.mail_manager import get_mail_bot_
     email_bot = get_mail_bot_()
     try:
         await email_bot.send_email(
@@ -460,7 +461,21 @@ class CandidateProcessAgent:
     async def __aenter__(self):
         # AsyncPostgresSaver 需要 postgresql:// 格式，去掉 SQLAlchemy 的 +psycopg 前缀
         pg_url = settings.database_url.replace("+psycopg", "")
-        self._checkpointer_conn = AsyncPostgresSaver.from_conn_string(pg_url)
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+        serde = JsonPlusSerializer(
+            allowed_msgpack_modules=[
+                ("app.models.position", "EducationEnum"),
+                ("app.models.user", "UserStatus"),
+                ("app.models.candidate", "GenderEnum"),
+                ("app.models.candidate", "CandidateStatusEnum"),
+                ("app.models.InterviewModel", "InterviewResultEnum"),
+                ("app.schemas.position_schema", "PositionSchema"),
+                ("app.schemas.candidate_schema", "CandidateSchema"),
+                ("app.schemas.user_schema", "UserSH"),
+                ("app.schemas.agent_schema", "AgentCandidateScoreSchema"),
+            ],
+        )
+        self._checkpointer_conn = AsyncPostgresSaver.from_conn_string(pg_url, serde=serde)
         self._checkpointer = await self._checkpointer_conn.__aenter__()
         await self._checkpointer.setup()
         return self

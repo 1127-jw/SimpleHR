@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from app.schemas.user_schema import UserSH
 # from core.cache import TaskInfoSchema
 from app.models.candidate import GenderEnum, CandidateStatusEnum
@@ -64,6 +64,12 @@ class CandidateSchema(BaseModel):
     creator: UserSH = Field(..., description="创建该候选人的信息")
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator('work_year', mode='before')
+    @classmethod
+    def default_work_year(cls, v):
+        """数据库中 work_year 可能为 NULL（历史数据），统一转为 0"""
+        return v if v is not None else 0
 
 class CandidateStatusUpdateSchema(BaseModel):
     status: CandidateStatusEnum = Field(..., description="候选人状态")

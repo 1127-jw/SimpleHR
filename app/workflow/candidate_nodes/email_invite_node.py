@@ -7,7 +7,6 @@ from app.core.exceptions import DingTalkServiceError, EmailSendError
 from app.service.dingtalk_ser import get_user_available_slots
 from app.workflow.candidate_state import CandidateRecruitmentState
 from app.workflow.error_handler import node_error_wrapper
-from utils.emailbot.mail_manager import get_mail_bot_
 from utils.time_ISO8601_datatime import now_beijing
 
 
@@ -17,6 +16,7 @@ async def send_interview_email(email: str, body: str) -> None:
     Raises:
         EmailSendError: 邮件发送失败。
     """
+    from utils.emailbot.mail_manager import get_mail_bot_
     email_bot = get_mail_bot_()
     subject = "面试邀请-协商面试时间"
 

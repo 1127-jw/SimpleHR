@@ -17,7 +17,6 @@ from app.repository.resume_repo import CandidateRepo
 from app.service.dingtalk_ser import create_calendar
 from app.workflow.candidate_state import CandidateRecruitmentState
 from app.workflow.error_handler import node_error_wrapper
-from utils.emailbot.mail_manager import get_mail_bot_
 from utils.time_ISO8601_datatime import to_naive_beijing
 
 
@@ -105,6 +104,7 @@ async def confirm_node(state: CandidateRecruitmentState) -> dict:
     {interview_datetime}
     请您准时参加面试。该邮件无需再回复。谢谢！
     """
+    from utils.emailbot.mail_manager import get_mail_bot_
     email_bot = get_mail_bot_()
     try:
         await email_bot.send_email(

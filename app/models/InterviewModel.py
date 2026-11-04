@@ -21,7 +21,9 @@ class InterviewModel(BaseModel):
 
     scheduled_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
     feedback: Mapped[Optional[str]] = mapped_column(Text)
-    result: Mapped[Optional[InterviewResultEnum]] = mapped_column(Enum(InterviewResultEnum))
+    result: Mapped[Optional[InterviewResultEnum]] = mapped_column(
+        Enum(InterviewResultEnum, native_enum=False, length=20)
+    )
 
     candidate_id: Mapped[str] = mapped_column(ForeignKey("candidates.id"), unique=True)
     interviewer_id: Mapped[str] = mapped_column(ForeignKey("users.id"))

@@ -1,5 +1,4 @@
 """邮件机器人全局单例管理器。"""
-import asyncio
 from typing import Optional
 
 from fastapi import Request
