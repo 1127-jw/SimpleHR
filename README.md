@@ -366,7 +366,6 @@ AI 评分通过 → 发邀请邮件（附建议时间）
 
 | 文档 | 内容 |
 |------|------|
-| [`docs/workflow_refactor_plan.md`](docs/workflow_refactor_plan.md) | 从 Agent 重构为 StateGraph 的设计方案（含 Interrupt 审批、批量并行、LangSmith 集成规划） |
 | [`docs/workflow_email_integration.md`](docs/workflow_email_integration.md) | 邮件机器人与招聘工作流的集成说明 |
 | [`docs/workflow_fixes.md`](docs/workflow_fixes.md) | 工作流历史问题修复记录 |
 | [`CHANGES.md`](CHANGES.md) | 阈值配置化 + 异常处理重构的完整改动记录 |
