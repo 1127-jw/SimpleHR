@@ -60,8 +60,8 @@ def find_available_slot(
 
         # 检查每个有效时间窗口 元组解包赋值 a, b = (a, b)
         for win_start_time, win_end_time in daily_windows:
-            window_start = datetime.combine(search_date.date(), win_start_time)
-            window_end = datetime.combine(search_date.date(), win_end_time)
+            window_start = datetime.combine(search_date.date(), win_start_time, tzinfo=BEIJING_TZ)
+            window_end = datetime.combine(search_date.date(), win_end_time, tzinfo=BEIJING_TZ)
 
             # 收集当天与当前窗口重叠的忙碌时段
             conflicts = []

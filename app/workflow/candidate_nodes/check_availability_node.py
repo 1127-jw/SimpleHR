@@ -146,14 +146,18 @@ async def _extract_time_from_reply(text: str) -> ProposedTime:
         result = await _proposed_time_agent.ainvoke(
             {"messages": [{"role": "user", "content": text}]}
         )
-        return result["structured_response"]
+        response = result["structured_response"]
+        # 如果返回的是 dict，转换为 ProposedTime
+        if isinstance(response, dict):
+            return ProposedTime(**response)
+        return response
     except Exception as e:
         logger.error("解析候选人邮件回复失败: %s", e)
         raise NegotiationError(f"解析候选人邮件回复失败: {e}") from e
 
 
 async def _parse_proposed_time(time_str: str) -> datetime:
-    """解析面试时间字符串，支持多种格式"""
+    """解析面试时间字符串，支持多种格式，返回带北京时区的 aware datetime"""
     formats = [
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%dT%H:%M:%S",
@@ -163,7 +167,9 @@ async def _parse_proposed_time(time_str: str) -> datetime:
     ]
     for fmt in formats:
         try:
-            return datetime.strptime(time_str, fmt)
+            naive_dt = datetime.strptime(time_str, fmt)
+            # 附加北京时区，与 available_slots 保持一致
+            return naive_dt.replace(tzinfo=BEIJING_TZ)
         except ValueError:
             continue
     raise NegotiationError(
