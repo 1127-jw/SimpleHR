@@ -45,6 +45,8 @@ import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import AuthLayout from '@/components/AuthLayout.vue'
+import { login, type LoginData } from '@/apis/user_apis'
+import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
 const ruleFormRef = ref<FormInstance>()
@@ -67,6 +69,19 @@ const rules = reactive<FormRules<typeof ruleForm>>({
 
 async function submitForm(formEl: FormInstance | undefined) {
   if (!formEl) return
-  await formEl.validate(async (valid) => {})
+  await formEl.validate(async (valid) => {
+    try{
+        const res = await login(ruleForm as LoginData)
+        const user = res.user
+        const useraccessToken = res.access_token
+        const userStore = useUserStore()
+        userStore.login(user,useraccessToken)
+        ElMessage.success('登录成功')
+        router.push('/')
+    }catch(error){
+        ElMessage.error('登录失败，请检查您的邮箱和密码')
+    }
+  }
+)
 }
 </script>
