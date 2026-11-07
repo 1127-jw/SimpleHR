@@ -12,12 +12,14 @@
 | **人机协作（interrupt / resume）** | `interrupt()` 暂停状态图等待候选人邮件回复，外部调度器拿到回复后 resume 继续执行 |
 | **检查点持久化** | `AsyncPostgresSaver` 将状态图检查点写入 PostgreSQL，服务重启后可从断点恢复 |
 | **分层异常处理** | 自定义异常层级 + `@node_error_wrapper` 装饰器：业务异常流转到 `error` 节点，基础设施异常穿透到外层统一标记 `PROCESSING_ERROR` |
+| **节点元信息保留** | `@wraps` 确保装饰后的节点名、文档字符串不丢失，日志中仍能正确显示 `scoring_node` 而非 `wrapped` |
+| **防御性错误终结点** | `error_node` 自身也做 try/catch，即使状态更新失败也保证记录 `critical` 日志，不会二次抛异常 |
 | **可配置阈值** | 评分通过阈值、协商轮次上限、面试时间窗口全部通过 `.env` 配置 |
 | **AI 多维度评分** | 工作经验 / 技术技能 / 软技能 / 教育背景 / 项目经验五维打分，结构化 JSON 输出并落库 |
 | **双模型容错** | 主模型（DeepSeek）+ 备用模型（Qwen），`ModelFallbackMiddleware` 自动降级 |
 | **简历解析流水线** | PaddleOCR 识别 + LLM 结构化提取，后台任务 + Redis 状态轮询 |
 | **钉钉深度集成** | OAuth2 扫码授权、日历读取空闲时段、自动创建面试日程 |
-| **邮件机器人** | 自研异步 IMAP/SMTP 邮件机器人，长连接 + 断线自愈 + 关键词规则监听 |
+| **邮件机器人** | 自研异步 IMAP/SMTP 邮件机器人，长连接 + 断线自愈 + 关键词规则监听；收到候选人回复后通过 `Command(resume=...)` 恢复状态图 |
 | **JWT 双令牌认证** | Access + Refresh Token，Redis 黑名单吊销，pwdlib Argon2 密码哈希 |
 | **结构化日志** | 节点/路由全链路 `candidate_id` 追踪，文件按天轮转 + 错误单独归档 |
 
@@ -77,6 +79,12 @@ flowchart TD
         W6 --> W10
         W8 --> W10
         W9 --> W10
+        W1 -.->|异常| WE[error 错误终结点]
+        W2 -.->|异常| WE
+        W3 -.->|异常| WE
+        W5 -.->|异常| WE
+        W7 -.->|异常| WE
+        WE --> W10
     end
 
     subgraph Infra["基础设施"]
@@ -299,7 +307,19 @@ AI 评分通过 → 发邀请邮件（附建议时间）
 
 > **为什么不 re-raise？** `run_candidate_agent` 由 FastAPI `BackgroundTasks` 调用，未捕获异常会被静默丢弃。因此所有异常必须在函数内**完全处理**。
 
-异常层级详见 [`app/core/exceptions.py`](app/core/exceptions.py)。
+**关键设计：**
+
+| 设计 | 说明 |
+|------|------|
+| 异常分级 | `BusinessException`（HTTP 400）与 `ExternalServiceError`（HTTP 502）分开处理 |
+| 节点安全网 | `@node_error_wrapper` 三层捕获：业务异常→error state，基础设施异常→穿透，未知异常→包装 |
+| BackgroundTask 安全 | 外层不 re-raise，改为结构化日志 + 更新状态 + 静默返回 |
+| `PROCESSING_ERROR` 状态 | 基础设施故障有明确终态，管理后台可筛选重试 |
+| `@wraps` 保留元信息 | 日志中节点名仍为 `scoring_node` 而非 `wrapped` |
+| 结构化路由日志 | 每个路由决策记录 `candidate_id` + 上下文 + 目标节点 |
+| `error_node` 防御性 | 即使状态更新失败也保证记录 `critical` 日志，不会二次抛异常 |
+
+异常层级详见 [`app/core/exceptions.py`](app/core/exceptions.py)，完整设计文档见 [`docs/error_handling_design.md`](docs/error_handling_design.md)。
 
 ---
 
@@ -366,6 +386,8 @@ AI 评分通过 → 发邀请邮件（附建议时间）
 
 | 文档 | 内容 |
 |------|------|
+| [`docs/error_handling_design.md`](docs/error_handling_design.md) | 分层异常架构、节点安全网、BackgroundTask 安全、PROCESSING_ERROR、@wraps、结构化日志、error_node 防御性 7 大亮点详解 |
+| [`docs/workflow_refactor_plan.md`](docs/workflow_refactor_plan.md) | 从 Agent 重构为 StateGraph 的设计方案（含 Interrupt 审批、批量并行、LangSmith 集成规划） |
 | [`docs/workflow_email_integration.md`](docs/workflow_email_integration.md) | 邮件机器人与招聘工作流的集成说明 |
 | [`docs/workflow_fixes.md`](docs/workflow_fixes.md) | 工作流历史问题修复记录 |
 | [`CHANGES.md`](CHANGES.md) | 阈值配置化 + 异常处理重构的完整改动记录 |
@@ -379,4 +401,7 @@ AI 评分通过 → 发邀请邮件（附建议时间）
 - `app/main.py` / `app/core/db.py` 中设置 `WindowsSelectorEventLoopPolicy`，解决 psycopg 在 ProactorEventLoop 下的兼容问题
 - 强制 uvicorn 使用 `SelectorEventLoop`
 - Word → PDF 转换使用 `pywin32`（仅 Windows 可用）
+
+---
+
 

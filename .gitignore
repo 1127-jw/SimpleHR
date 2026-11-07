@@ -1,6 +1,8 @@
 .env
 .venv
 .jbeval
+RESUME_PROJECT.md
+CHANGES.md
 
 # Logs
 logs
