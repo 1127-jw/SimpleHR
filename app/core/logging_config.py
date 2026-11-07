@@ -7,6 +7,17 @@ from pathlib import Path
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
 
+
+"""
+字段	含义
+%(asctime)s	时间
+%(levelname)-8s	日志级别
+%(name)s	模块名
+%(funcName)s	函数名
+%(lineno)d	行号
+%(threadName)s	线程名
+%(message)s	日志内容
+"""
 LOG_FORMAT = (
     "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | "
     "%(threadName)s | %(message)s"
@@ -15,7 +26,11 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def setup_logging(level: str = "INFO"):
-    """初始化全局日志配置。"""
+    """初始化全局日志配置。
+    参数 level：控制日志的最低采集级别，默认 "INFO"。
+    类型提示 str：标注参数类型，便于 IDE 静态检查和代码可读性。
+    默认值 "INFO"：生产环境通常只记录 INFO 及以上级别，调试时可传入 "DEBUG"。
+"""
     root = logging.getLogger()
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
 
@@ -56,7 +71,10 @@ def setup_logging(level: str = "INFO"):
     error_file.setFormatter(formatter)
     root.addHandler(error_file)
 
-    # ---- 节点执行专用日志（只记 INFO 以上）----
+    # ---- 节点执行专用日志（独立 logger，只写 nodes.log）----
+    nodes_logger = logging.getLogger("workflow.nodes")
+    nodes_logger.setLevel(logging.INFO)
+    nodes_logger.propagate = False  # 不再向 root 传播，避免重复
     node_file = logging.handlers.TimedRotatingFileHandler(
         filename=LOG_DIR / "nodes.log",
         when="midnight",
@@ -67,4 +85,4 @@ def setup_logging(level: str = "INFO"):
     node_file.setLevel(logging.INFO)
     node_file.setFormatter(formatter)
     node_file.suffix = "%Y-%m-%d"
-    root.addHandler(node_file)
+    nodes_logger.addHandler(node_file)

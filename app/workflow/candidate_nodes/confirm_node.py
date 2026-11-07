@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("workflow.nodes")
 
 from app.agents.candidate import get_access_token
 from app.core.db import AsyncSessionFactory

@@ -12,13 +12,12 @@ export interface User {
     email:string
     phone_number:string|null
     realname:string
-    // avatar:string|null
+    avatar:string|null
     department:Department|null
-    is_active:boolean
+    status: 'ACTIVE' | 'BLOCKED' | 'RESIGNED'
     is_superuser:boolean
     is_hr:boolean
     created_at:string
-    // 在 TypeScript 中，undefined 和 null 是两个不同的概念。? 实际上等价于 | undefined。
     managed_departments?:Department[]
 }
 
@@ -59,7 +58,7 @@ export const useUserStore = defineStore('user',{
         },
 
         isActive():boolean{
-            return this.user?.is_active || false
+            return this.user?.status === 'ACTIVE'
         }
     },
 

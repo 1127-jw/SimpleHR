@@ -5,7 +5,7 @@ from app.core.db import AsyncSessionFactory
 from app.repository.resume_repo import CandidateRepo
 from app.models.candidate import CandidateStatusEnum
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("workflow.nodes")
 
 
 @node_error_wrapper

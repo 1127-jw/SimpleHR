@@ -6,13 +6,15 @@ class HttpRequest {
   public baseURL: string
 
   constructor() {
-
+    // TODO: Add your API base URL here
     const baseURL = import.meta.env.VITE_API_BASE_URL
     this.baseURL = baseURL
+
     this.instance = axios.create({
       baseURL,
       timeout: 300000,
     })
+
     this.initializeInterceptors()
   }
 
@@ -22,7 +24,7 @@ class HttpRequest {
       (config) => {
         const userStore = useUserStore()
         const token = userStore.accessToken
-        // console.log('token：', token)
+        console.log('token：', token)
         if (token) {
           config.headers.Authorization = `Bearer ${token}`
         }

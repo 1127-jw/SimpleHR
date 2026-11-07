@@ -2,7 +2,7 @@ import logging
 from app.workflow.candidate_state import CandidateRecruitmentState
 from app.workflow.error_handler import node_error_wrapper
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("workflow.nodes")
 
 
 @node_error_wrapper

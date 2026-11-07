@@ -4,7 +4,7 @@ from langgraph.types import interrupt
 from langchain.agents import create_agent
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("workflow.nodes")
 
 from app.agents.prompts import PROPOSED_TIME_SYSTEM_PROMPT
 from app.core.config import get_settings

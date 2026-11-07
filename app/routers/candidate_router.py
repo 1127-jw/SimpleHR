@@ -70,11 +70,8 @@ async def get_task_status(
     key = f"task:{task_id}"
     task_json = await r.get(key)
     if not task_json:
-        return None
-    # model_validate、model_validate_json 从 Python字典、ORM对象、JSON 字符串直接验证并生成模型实例
-    # model_dump_json、model_dump 把模型实例直接序列化成 JSON 字符串、python字典的方法
+        raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在或已过期")
     task_info = TaskInfoSchema.model_validate_json(task_json)
-
     return task_info
 
 @router.post("/create",summary="创建候选人")
