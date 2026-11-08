@@ -25,6 +25,7 @@ from app.routers.candidate_router import router as candidate_router
 from contextlib import asynccontextmanager
 from app.core.redis_client import init_redis, close_redis
 
+settings = get_settings()
 
 
 @asynccontextmanager
@@ -47,7 +48,6 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    settings = get_settings()
 
     app = FastAPI(
         title=settings.app_name,

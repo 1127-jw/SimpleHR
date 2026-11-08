@@ -43,3 +43,11 @@ Traceback (most recent call last):
     if pt.refused:
        ^^^^^^^^^^
 AttributeError: 'dict' object has no attribute 'refused'
+2026-11-08 17:43:25 | ERROR    | app.tasks.ocr_tasks:ocr_parse_resume_task:38 | MainThread | [OCR] 任务失败: 错误：E:\dj\boke\simplejob\upload\7aede922-90b6-465d-b3c5-5649a10bd844.pdf不存在！
+Traceback (most recent call last):
+  File "E:\dj\boke\simplejob\app\tasks\ocr_tasks.py", line 23, in ocr_parse_resume_task
+    job_id = await paddle_ocr.create_job(file_path)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\dj\boke\simplejob\utils\ORC_ser.py", line 47, in create_job
+    raise ValueError(f"错误：{file}不存在！")
+ValueError: 错误：E:\dj\boke\simplejob\upload\7aede922-90b6-465d-b3c5-5649a10bd844.pdf不存在！

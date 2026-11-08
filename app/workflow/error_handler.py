@@ -106,6 +106,11 @@ async def error_node(state: CandidateRecruitmentState) -> dict:
                     candidate_id=cid,
                     status=CandidateStatusEnum.PROCESSING_ERROR,
                 )
+                # 保存异常信息
+                await repo.update_error_message(
+                    candidate_id=cid,
+                    error_message=f"[{error_stage}] {error_msg}",
+                )
     except Exception as e:
         logger.critical(
             "[error_node] failed to update status | candidate_id=%s",

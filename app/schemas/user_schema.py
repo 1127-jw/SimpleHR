@@ -21,6 +21,7 @@ class DepartmentSH(BaseModel):
 class UserSH(BaseModel):
     id: str = Field(...,description="User ID")
     username: str = Field(...,description="Username")
+    realname: str = Field(..., description="Real name")
     phone_number: str | None = Field(None, description="Phone number")
     email: EmailStr = Field(..., description="Email address")
     avatar: str | None = Field(None, description="Avatar")

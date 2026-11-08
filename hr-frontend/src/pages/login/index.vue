@@ -75,8 +75,9 @@ async function submitForm(formEl: FormInstance | undefined) {
       const res = await login(ruleForm as LoginData)
       const user = res.user
       const useraccessToken = res.access_token
+      const userRefreshToken = res.refresh_token
       const userStore = useUserStore()
-      userStore.login(user, useraccessToken)
+      userStore.login(user, useraccessToken, userRefreshToken)
       ElMessage.success('登录成功')
       router.push('/')
     } catch (error) {

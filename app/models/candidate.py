@@ -66,6 +66,7 @@ class CandidateModel(BaseModel):
         default=CandidateStatusEnum.APPLICATION, nullable=False
     )
     work_year:Mapped[int] = mapped_column(Integer,default=0, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 异常时的错误信息
 
     position_id: Mapped[str] = mapped_column(ForeignKey("positions.id"))
     resume_id: Mapped[str] = mapped_column(ForeignKey("resumes.id"))

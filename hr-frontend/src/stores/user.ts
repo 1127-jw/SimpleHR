@@ -1,80 +1,97 @@
 import { defineStore } from "pinia"
-import type { n } from "vue-router/dist/index-u4XkZVDG.js"
 
 export interface Department {
-    id:string
-    name:string
+    id: string
+    name: string
 }
 
 export interface User {
-    id:string
-    username:string
-    email:string
-    phone_number:string|null
-    realname:string
-    avatar:string|null
-    department:Department|null
+    id: string
+    username: string
+    email: string
+    realname: string
+    phone_number: string | null
+    avatar: string | null
+    department: Department | null
     status: 'ACTIVE' | 'BLOCKED' | 'RESIGNED'
-    is_superuser:boolean
-    is_hr:boolean
-    created_at:string
-    managed_departments?:Department[]
+    is_superuser: boolean
+    is_hr: boolean
+    created_at: string
+    managed_departments?: Department[]
 }
 
 export interface UserState {
-    user:User|null
-    accessToken:string|null
+    user: User | null
+    accessToken: string | null
+    refreshToken: string | null
 }
 
-export const useUserStore = defineStore('user',{
+export const useUserStore = defineStore('user', {
     state: (): UserState => {
         const user = localStorage.getItem('user')
         const accessToken = localStorage.getItem('accessToken')
-    return{
-        user:user?JSON.parse(user):null,
-        accessToken: accessToken||null
-    }
+        const refreshToken = localStorage.getItem('refreshToken')
+        return {
+            user: user ? JSON.parse(user) : null,
+            accessToken: accessToken || null,
+            refreshToken: refreshToken || null,
+        }
     },
 
-    getters:{
-        isLoggedIn(): boolean{
+    getters: {
+        isLoggedIn(): boolean {
             return !!this.accessToken
         },
 
-        getUserInfo():User|null{
+        getUserInfo(): User | null {
             return this.user
         },
 
-        getAccessToken():string|null{
-        return this.accessToken
+        getAccessToken(): string | null {
+            return this.accessToken
         },
 
-        isHr():boolean{
+        getRefreshToken(): string | null {
+            return this.refreshToken
+        },
+
+        isHr(): boolean {
             return this.user?.is_hr || false
         },
 
-        isSuperUser():boolean{
+        isSuperUser(): boolean {
             return this.user?.is_superuser || false
         },
 
-        isActive():boolean{
+        isActive(): boolean {
             return this.user?.status === 'ACTIVE'
         }
     },
 
-    actions:{
-        login(user:User, accessToken:string){
-            this.user=user
-            this.accessToken=accessToken
+    actions: {
+        login(user: User, accessToken: string, refreshToken: string) {
+            this.user = user
+            this.accessToken = accessToken
+            this.refreshToken = refreshToken
             localStorage.setItem('user', JSON.stringify(user))
             localStorage.setItem('accessToken', accessToken)
+            localStorage.setItem('refreshToken', refreshToken)
         },
-        logout(){
-            this.user=null
-            this.accessToken=null
+
+        logout() {
+            this.user = null
+            this.accessToken = null
+            this.refreshToken = null
             localStorage.removeItem('user')
             localStorage.removeItem('accessToken')
+            localStorage.removeItem('refreshToken')
         },
-    }
 
+        updateTokens(accessToken: string, refreshToken: string) {
+            this.accessToken = accessToken
+            this.refreshToken = refreshToken
+            localStorage.setItem('accessToken', accessToken)
+            localStorage.setItem('refreshToken', refreshToken)
+        }
+    }
 })

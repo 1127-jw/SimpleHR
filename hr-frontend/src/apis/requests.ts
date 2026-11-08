@@ -1,12 +1,14 @@
-import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios'
+﻿import axios, { type AxiosInstance, type AxiosRequestConfig, type InternalAxiosRequestConfig } from 'axios'
 import { useUserStore } from '@/stores/user'
+import router from '@/router'
 
 class HttpRequest {
   private instance: AxiosInstance
   public baseURL: string
+  private isRefreshing = false
+  private waitQueue: Array<(token: string) => void> = []
 
   constructor() {
-    // TODO: Add your API base URL here
     const baseURL = import.meta.env.VITE_API_BASE_URL
     this.baseURL = baseURL
 
@@ -19,32 +21,85 @@ class HttpRequest {
   }
 
   private initializeInterceptors() {
-    // Request interceptor
+    // 请求拦截器：附加 accessToken
     this.instance.interceptors.request.use(
-      (config) => {
+      (config: InternalAxiosRequestConfig) => {
         const userStore = useUserStore()
         const token = userStore.accessToken
-        console.log('token：', token)
         if (token) {
           config.headers.Authorization = `Bearer ${token}`
         }
         return config
       },
-      (error) => {
-        return Promise.reject(error)
-      },
+      (error) => Promise.reject(error),
     )
 
-    // Response interceptor
+    // 响应拦截器：401 时自动刷新 token
     this.instance.interceptors.response.use(
-      (response) => {
-        return response.data
-      },
-      (error) => {
-        // TODO: Add global error handling
+      (response) => response.data,
+      async (error) => {
+        const originalRequest = error.config as AxiosRequestConfig & { _retry?: boolean }
+
+        // 401 且未重试过 → 尝试刷新
+        if (error.response?.status === 401 && !originalRequest._retry) {
+          originalRequest._retry = true
+
+          try {
+            const newToken = await this.refreshAccessToken()
+            if (originalRequest.headers) {
+              originalRequest.headers.Authorization = `Bearer ${newToken}`
+            }
+            return this.instance.request(originalRequest)
+          } catch (refreshError) {
+            // 刷新失败 → 登出并跳转登录页
+            const userStore = useUserStore()
+            userStore.logout()
+            router.push('/login')
+            return Promise.reject(refreshError)
+          }
+        }
+
         return Promise.reject(error)
       },
     )
+  }
+
+  /**
+   * 使用 refreshToken 获取新的 accessToken
+   */
+  private async refreshAccessToken(): Promise<string> {
+    const userStore = useUserStore()
+    const refreshToken = userStore.refreshToken
+
+    if (!refreshToken) {
+      throw new Error('No refresh token')
+    }
+
+    // 如果正在刷新，等待结果
+    if (this.isRefreshing) {
+      return new Promise((resolve) => {
+        this.waitQueue.push((token: string) => resolve(token))
+      })
+    }
+
+    this.isRefreshing = true
+
+    try {
+      const response = await axios.post(`${this.baseURL}/user/refresh`, {
+        refresh_token: refreshToken,
+      })
+
+      const { access_token, refresh_token } = response.data
+      userStore.updateTokens(access_token, refresh_token)
+
+      // 通知等待中的请求
+      this.waitQueue.forEach((callback) => callback(access_token))
+      this.waitQueue = []
+
+      return access_token
+    } finally {
+      this.isRefreshing = false
+    }
   }
 
   public request<T = any>(config: AxiosRequestConfig): Promise<T> {

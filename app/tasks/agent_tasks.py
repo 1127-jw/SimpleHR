@@ -16,7 +16,7 @@ settings = get_settings()
 
 
 async def _mark_processing_error(candidate_id: str, error_msg: str) -> None:
-    """将候选人状态标记为处理异常。
+    """将候选人状态标记为处理异常，并保存异常信息。
 
     独立函数，确保即使主流程异常也能尽力更新状态。
     """
@@ -28,11 +28,15 @@ async def _mark_processing_error(candidate_id: str, error_msg: str) -> None:
                     candidate_id=candidate_id,
                     status=CandidateStatusEnum.PROCESSING_ERROR,
                 )
+                await repo.update_error_message(
+                    candidate_id=candidate_id,
+                    error_message=error_msg,
+                )
         logger.info(f"候选人 {candidate_id} 已标记为处理异常")
     except Exception as e:
-                logger.opt(exception=True).critical(
-                    f"标记候选人 {candidate_id} 处理异常状态失败: {e}"
-                )
+        logger.opt(exception=True).critical(
+            f"标记候选人 {candidate_id} 处理异常状态失败: {e}"
+        )
 
 
 async def run_candidate_agent(

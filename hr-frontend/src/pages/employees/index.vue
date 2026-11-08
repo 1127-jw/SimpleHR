@@ -26,11 +26,7 @@
 
     <!-- Employee Table -->
     <el-table v-loading="loading" :data="employeeList" border style="width: 100%">
-      <el-table-column label="用户名">
-        <template #default="scope">
-          <span>{{ scope.row.realname }}</span>
-        </template>
-      </el-table-column>
+      <el-table-column prop="username" label="用户名" />
       <el-table-column prop="realname" label="姓名" />
       <el-table-column prop="email" label="邮箱" />
       <el-table-column prop="department.name" label="部门" />

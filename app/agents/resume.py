@@ -8,10 +8,10 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 
 agent = create_agent(
-    model=qwen_llm,
+    model=deepseek_llm,
     middleware=[
         ModelFallbackMiddleware(
-            first_model=deepseek_llm,
+            first_model=qwen_llm,
         ),
     ],
     system_prompt=EXTRACT_CANDIDATE_SYSTEM_PROMPT,

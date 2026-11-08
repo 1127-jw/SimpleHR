@@ -28,6 +28,21 @@
           </template>
         </el-table-column>
         <el-table-column prop="created_at" label="创建时间"></el-table-column>
+        <el-table-column label="错误信息" width="200">
+          <template #default="scope">
+            <el-tooltip
+              v-if="scope.row.error_message"
+              :content="scope.row.error_message"
+              placement="top"
+              :show-after="200"
+            >
+              <el-tag type="danger" size="small" effect="plain">
+                {{ scope.row.error_message.length > 20 ? scope.row.error_message.slice(0, 20) + '...' : scope.row.error_message }}
+              </el-tag>
+            </el-tooltip>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作">
           <template #default="scope">
             <el-button link type="primary" @click="showDetails(scope.row)">详情</el-button>
@@ -66,6 +81,9 @@
           <el-tag :type="getStatusTagType(selectedCandidate.status as string)">{{
             selectedCandidate.status
           }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item v-if="selectedCandidate.error_message" label="错误信息" :span="2">
+          <el-text type="danger" size="small">{{ selectedCandidate.error_message }}</el-text>
         </el-descriptions-item>
         <el-descriptions-item v-if="selectedCandidate.creator" label="推荐人">{{
           selectedCandidate.creator.realname

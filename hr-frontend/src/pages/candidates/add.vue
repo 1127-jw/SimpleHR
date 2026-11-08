@@ -122,7 +122,7 @@ interface OcrResult {
 }
 
 const POLL_INTERVAL_MS = 3000
-const POLL_MAX_TIMES = 40  // 40 × 3s = 120s，给 OCR 足够时间
+const POLL_MAX_TIMES = 40 // 40 × 3s = 120s，给 OCR 足够时间
 
 const selectedPosition = ref<string>('')
 const positions = ref<Position[]>([])

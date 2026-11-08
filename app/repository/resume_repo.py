@@ -41,6 +41,10 @@ class CandidateRepo(BaseRepo):
         stmt = update(CandidateModel).where(CandidateModel.id==candidate_id).values(status=status)
         await self.session.execute(stmt)
 
+    async def update_error_message(self, candidate_id: str, error_message: str):
+        stmt = update(CandidateModel).where(CandidateModel.id==candidate_id).values(error_message=error_message)
+        await self.session.execute(stmt)
+
     async def get_by_id(self, candidate_id: str) -> CandidateModel | None:
         return await self.session.scalar(
             select(CandidateModel)

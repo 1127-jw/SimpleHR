@@ -73,6 +73,8 @@ export interface Candidate {
   skills?: string | null
   status?: CandidateStatusEnum | string | null
   work_year?: number
+  created_at: string
+  error_message?: string | null
   creator: User
   position: Position
   resume: Resume
