@@ -1,7 +1,7 @@
+import logging
+
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
-
-from loguru import logger
 
 from utils.emailbot.models import ParsedEmail
 
@@ -15,7 +15,7 @@ from app.schemas.position_schema import PositionSchema
 from app.schemas.user_schema import UserSH
 from app.workflow.candidate_graph import build_candidate_graph
 
-
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -38,7 +38,7 @@ async def notify(email: ParsedEmail, rule) -> None:
     """
         files = "、".join(a.filename for a in email.attachments) or "（无附件）"
     logger.info(
-        "[命中规则] {} | 来自 {} | 主题: {} | 附件: {}",
+        "[命中规则] %s | 来自 %s | 主题: %s | 附件: %s",
         rule.name, email.from_.address, email.subject, files,
     )
     # ---- 基本信息 ----
@@ -84,10 +84,10 @@ async def notify(email: ParsedEmail, rule) -> None:
 
     elif rule.name == "询问面试时间或进度":
         from app.agents.candidate import CandidateProcessAgent
-        logger.info("询问面试时间/进度: 来自 {} - {}", email.from_.address, email.subject)
+        logger.info("询问面试时间/进度: 来自 %s - %s", email.from_.address, email.subject)
         candidate_schema, position_schema, interviewer_schema = await _find_candidate_by_email(email.from_.address)
         if not candidate_schema:
-            logger.warning("未找到对应的候选人: {}", email.from_.address)
+            logger.warning("未找到对应的候选人: %s", email.from_.address)
             return
         # if candidate_schema.status != CandidateStatusEnum.AI_FILTER_PASSED:
         #     logger.warning("候选人未通过ai筛选")
@@ -103,7 +103,7 @@ async def notify(email: ParsedEmail, rule) -> None:
                     messages=[HumanMessage(content=f"候选人回复了以下邮件，请根据回复内容决定下一步操作：\n\n主题：{email.subject}\n\n内容：{email.text}")],
                     thread_id=email.from_.address,
                 )
-                logger.info("面试时间安排完成: {}", resp)
+                logger.info("面试时间安排完成: %s", resp)
         else:
             async with get_checkpointer() as checkpointer:
                 candidate_graph = build_candidate_graph(checkpointer)

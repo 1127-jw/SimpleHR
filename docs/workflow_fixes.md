@@ -143,12 +143,14 @@ EMAIL_REPLY_TIMEOUT = "TIMEOUT"   # interrupt 超时恢复标记（外部调度�
 
 ```python
 """工作流超时调度任务：扫描超时未回复的线程并以 TIMEOUT 恢复执行。"""
+import logging
 from datetime import datetime
-from loguru import logger
 from langgraph.types import Command
 
 from app.workflow.candidate_state import EMAIL_REPLY_TIMEOUT
 from app.service.workflow_thread_store import iter_expired_threads, remove_thread
+
+logger = logging.getLogger(__name__)
 
 
 async def expire_stale_negotiations(get_checkpointer) -> None:
@@ -163,9 +165,9 @@ async def expire_stale_negotiations(get_checkpointer) -> None:
                 config={"configurable": {"thread_id": thread_id}},
             )
             await remove_thread(thread_id)
-            logger.info("协商超时，已终止线程 {}", thread_id)
+            logger.info("协商超时，已终止线程 %s", thread_id)
         except Exception as e:  # 单个线程失败不影响其他线程
-            logger.error("处理超时线程 {} 失败：{}", thread_id, e)
+            logger.error("处理超时线程 %s 失败：%s", thread_id, e)
 ```
 
 #### 插入 C：`app/main.py` 的 lifespan 启动调度器

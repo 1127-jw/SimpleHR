@@ -11,17 +11,18 @@ from __future__ import annotations
 
 import asyncio
 import imaplib
+import logging
 from email import message_from_bytes
 from email.message import Message
 from typing import Iterable, Optional
-
-from loguru import logger
 
 # 注册 IMAP ID 命令（RFC 2971）到 imaplib 的命令表。
 # 网易系（163/126/yeah.net）会检查客户端是否发送过 ID，
 # 没发则在 SELECT 阶段返回 "Unsafe Login. Please contact kefu_service163"。
 # 注册后 imaplib 在 AUTH 状态下允许发送 ID 命令，避免被误判为非法命令。
 imaplib.Commands["ID"] = ("AUTH",)
+
+logger = logging.getLogger(__name__)
 
 
 class ImapClient:
@@ -66,7 +67,7 @@ class ImapClient:
         try:
             self._conn._simple_command("ID", args)
         except Exception as e:
-            logger.warning("IMAP ID command failed (non-fatal): {}", e)
+            logger.warning("IMAP ID command failed (non-fatal): %s", e)
 
     async def select(self, mailbox: str = "INBOX") -> None:
         async with self._lock:
@@ -110,14 +111,14 @@ class ImapClient:
             return
 
         mailbox = self._mailbox or "INBOX"
-        logger.info("IMAP state is {}, selecting {}...", self._conn.state, mailbox)
+        logger.info("IMAP state is %s, selecting %s...", self._conn.state, mailbox)
         await asyncio.to_thread(self._conn.select, mailbox)
         self._mailbox = mailbox
 
         # select() 失败时 imaplib 只把 state 设为 AUTH，不抛异常
         if getattr(self._conn, "state", None) != "SELECTED":
             logger.warning(
-                "IMAP select {} failed (state={}), reconnecting without ID",
+                "IMAP select %s failed (state=%s), reconnecting without ID",
                 mailbox, self._conn.state,
             )
             # 跳过 _send_id：之前 _send_id 失败很可能就是导致 select 被服务器拒绝的原因
@@ -128,7 +129,7 @@ class ImapClient:
 
         skip_id=True 时跳过 _send_id，用于 _send_id 本身导致服务器拒绝后续命令的场景。
         """
-        logger.info("IMAP reconnecting (skip_id={})...", skip_id)
+        logger.info("IMAP reconnecting (skip_id=%s)...", skip_id)
         if self._conn:
             try:
                 await asyncio.to_thread(self._conn.logout)
@@ -157,7 +158,7 @@ class ImapClient:
         """
         def _search():
             typ, data = self._conn.uid("SEARCH", criteria)
-            logger.debug("IMAP SEARCH cmd=UID SEARCH {} → typ={}, data={}", criteria, typ, data)
+            logger.debug("IMAP SEARCH cmd=UID SEARCH %s → typ=%s, data=%s", criteria, typ, data)
             if typ != "OK":
                 raise RuntimeError(f"IMAP SEARCH failed: {typ} {data}")
             # 空邮箱或没匹配时 data[0] 是 b""，所以要 `or b""` 兜底再 split
@@ -174,7 +175,7 @@ class ImapClient:
             try:
                 return await asyncio.to_thread(_search)
             except (imaplib.IMAP4.abort, imaplib.IMAP4.error) as e:
-                logger.warning("SEARCH aborted, reconnect & retry: {}", e)
+                logger.warning("SEARCH aborted, reconnect & retry: %s", e)
                 await self._reconnect()
                 await self._ensure_selected()
                 return await asyncio.to_thread(_search)
@@ -200,7 +201,7 @@ class ImapClient:
             try:
                 return await asyncio.to_thread(_fetch)
             except (imaplib.IMAP4.abort, imaplib.IMAP4.error) as e:
-                logger.warning("FETCH uid={} aborted, reconnect & retry: {}", uid, e)
+                logger.warning("FETCH uid=%s aborted, reconnect & retry: %s", uid, e)
                 await self._reconnect()
                 await self._ensure_selected()
                 return await asyncio.to_thread(_fetch)
@@ -212,7 +213,7 @@ class ImapClient:
             try:
                 out.append((str(uid), await self.fetch_rfc822(uid)))
             except Exception:
-                logger.exception("fetch failed uid={}", uid)
+                logger.exception("fetch failed uid=%s", uid)
         return out
 
     async def get_max_uid(self) -> Optional[int]:
@@ -241,7 +242,7 @@ class ImapClient:
             try:
                 await asyncio.to_thread(_store)
             except (imaplib.IMAP4.abort, imaplib.IMAP4.error) as e:
-                logger.warning("STORE uid={} aborted, reconnect & retry: {}", uid, e)
+                logger.warning("STORE uid=%s aborted, reconnect & retry: %s", uid, e)
                 await self._reconnect()
                 await self._ensure_selected()
                 await asyncio.to_thread(_store)

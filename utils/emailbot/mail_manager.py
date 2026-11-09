@@ -1,10 +1,9 @@
 """邮件机器人全局单例管理器。"""
+import logging
 from typing import Optional
 
 from fastapi import Request
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-from loguru import logger
 
 from utils.emailbot.bot import MailBot
 from utils.emailbot.config import MailSettings
@@ -12,6 +11,8 @@ from utils.emailbot.config import MailSettings
 from utils.emailbot.rules import DEFAULT_RULES
 
 from utils.emailbot.notify import notify
+
+logger = logging.getLogger(__name__)
 
 
 class MailManager:
@@ -105,7 +106,7 @@ class MailManager:
 
         try:
             await mgr._bot.connect()
-            logger.info("邮箱连接成功: {}", settings.email)
+            logger.info("邮箱连接成功: %s", settings.email)
         except Exception:
             logger.exception("邮箱连接失败，继续启动（后台会重试）")
 
@@ -125,7 +126,7 @@ class MailManager:
         cls._scheduler.start()
         mgr._initialized = True
 
-        logger.info("MailManager 初始化完成，轮询每 {}s 一次", poll_interval)
+        logger.info("MailManager 初始化完成，轮询每 %ss 一次", poll_interval)
         return mgr
 
     @classmethod

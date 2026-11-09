@@ -8,15 +8,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 
 from dotenv import load_dotenv
-from loguru import logger
 
 from bot import MailBot
 from config import MailSettings
 from models import ParsedEmail
 from rules import DEFAULT_RULES
+
+logger = logging.getLogger(__name__)
 
 
 async def notify(email: ParsedEmail, rule) -> None:
@@ -24,7 +26,7 @@ async def notify(email: ParsedEmail, rule) -> None:
     企业微信/钉钉 webhook、写数据库、推前端 WebSocket 等。"""
     files = "、".join(a.filename for a in email.attachments) or "（无附件）"
     logger.info(
-        "[命中规则] {} | 来自 {} | 主题: {} | 附件: {}",
+        "[命中规则] %s | 来自 %s | 主题: %s | 附件: %s",
         rule.name, email.from_.address, email.subject, files,
     )
 
@@ -53,7 +55,7 @@ async def main() -> None:
     # 钉钉 webhook/写库）完全由业务方决定，机器人本身不关心
     bot = MailBot(settings, rules=DEFAULT_RULES, on_match=notify)
     async with bot:  # 进语境自动 connect+login，出语境自动 logout+quit
-        logger.info("mail bot started, polling every {}s ...", settings.poll_interval)
+        logger.info("mail bot started, polling every %ss ...", settings.poll_interval)
         while True:
             try:
                 await bot.poll_once()

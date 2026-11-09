@@ -35,11 +35,10 @@ poll_once() — 一轮完整处理：
 from __future__ import annotations
 
 import asyncio
+import logging
 from email.message import EmailMessage
 from email.utils import make_msgid
 from typing import Awaitable, Callable, Optional
-
-from loguru import logger
 
 from utils.emailbot.attachments import AttachmentSaver
 from utils.emailbot.config import MailSettings
@@ -49,6 +48,8 @@ from utils.emailbot.parser import parse_email
 from utils.emailbot.rules import MailRule
 from utils.emailbot.smtp_client import SmtpClient
 from utils.emailbot.state import StateStore
+
+logger = logging.getLogger(__name__)
 
 # 命中规则后的回调：async def hook(email, rule) -> None
 MatchHook = Callable[[ParsedEmail, MailRule], Awaitable[None]]
@@ -119,16 +120,16 @@ class MailBot:
         await self._ensure_connected()
 
         last_uid = self._state.last_uid
-        logger.info("poll start: last_uid={}", last_uid)
+        logger.info("poll start: last_uid=%s", last_uid)
         if last_uid is None:
             # 冷启动：把游标定到当前最大 UID，只处理"从现在起"的新邮件。
             # 若想补处理历史未读，把这里改成 fetch 条件 "UNSEEN"。
             self._state.set_last_uid(await self._imap.get_max_uid() or 0)
-            logger.info("cold start, baseline last_uid={}", self._state.last_uid)
+            logger.info("cold start, baseline last_uid=%s", self._state.last_uid)
             return []
 
         uids = await self._imap.search_uids(f"UID {last_uid + 1}:*", min_uid=last_uid)
-        logger.info("poll search: last_uid={}, found {} uid(s) {}", last_uid, len(uids), uids)
+        logger.info("poll search: last_uid=%s, found %s uid(s) %s", last_uid, len(uids), uids)
         if not uids:
             return []
 
@@ -145,13 +146,13 @@ class MailBot:
             try:
                 await self._handle_one(email)
             except Exception:
-                logger.exception("handle email uid={} failed", uid)
+                logger.exception("handle email uid=%s failed", uid)
             finally:
                 # 无论成没成功都推进游标：失败已记日志，不会因此卡死整条链
                 self._state.set_last_uid(int(uid))
                 processed.append(email)
 
-        logger.info("poll done: {} new email(s), last_uid={}", len(processed), self._state.last_uid)
+        logger.info("poll done: %s new email(s), last_uid=%s", len(processed), self._state.last_uid)
         return processed
 
     async def _handle_one(self, email: ParsedEmail) -> None:
@@ -180,7 +181,7 @@ class MailBot:
         if matched is None:
             return
 
-        logger.info("rule [{}] hit: uid={} from={} subject={}",
+        logger.info("rule [%s] hit: uid=%s from=%s subject=%s",
                     matched.name, email.uid, email.sender, email.subject)
 
         # 5) 去重后回复（Message-ID 判重，防游标回退导致的二次回复）
@@ -199,7 +200,7 @@ class MailBot:
     async def _mark_email_seen(self, email: ParsedEmail) -> None:
         """把一封邮件标记为已读：IMAP \\Seen 标志 + state 去重。"""
         # state 去重（防同 UID 回退导致的重复处理）
-        logger.debug("mark_seen uid={} message_id={} is_seen={}",
+        logger.debug("mark_seen uid=%s message_id=%s is_seen=%s",
                      email.uid, email.message_id, self._state.is_seen(email.message_id))
         self._state.mark_seen(email.message_id)
         # IMAP \Seen 标志（让邮箱里不再显示为未读）
@@ -207,7 +208,7 @@ class MailBot:
             try:
                 await self._imap.mark_seen(str(email.uid))
             except Exception:
-                logger.exception("mark_seen uid={} failed", email.uid)
+                logger.exception("mark_seen uid=%s failed", email.uid)
 
     async def fetch_latest(self, limit: int | None = None) -> list[ParsedEmail]:
         await self._ensure_connected()
@@ -269,4 +270,4 @@ class MailBot:
             msg["References"] = f"{refs} {email.message_id}".strip() or email.message_id
         msg.set_content(text)
         await self._smtp.send_message(msg)
-        logger.info("replied uid={} to={}", email.uid, reply_to)
+        logger.info("replied uid=%s to=%s", email.uid, reply_to)

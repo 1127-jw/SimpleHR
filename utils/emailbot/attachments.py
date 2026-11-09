@@ -9,13 +9,14 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
-from loguru import logger
-
 from utils.emailbot.models import Attachment, ParsedEmail
 from utils.emailbot.parser import extract_attachments
+
+logger = logging.getLogger(__name__)
 
 # Windows/Linux 都安全的字符集：中文保留，只滤掉路径与非法符号
 _UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -57,7 +58,7 @@ class AttachmentSaver:
             try:
                 path.write_bytes(data)
             except OSError as e:
-                logger.error("save attachment failed: {} ({})", path, e)
+                logger.error("save attachment failed: %s (%s)", path, e)
                 continue
             saved.append(Attachment(
                 filename=filename,
@@ -65,5 +66,5 @@ class AttachmentSaver:
                 content_type=att.content_type,
                 size=att.size,
             ))
-            logger.info("saved attachment: {} ({} bytes)", path, att.size)
+            logger.info("saved attachment: %s (%s bytes)", path, att.size)
         return saved

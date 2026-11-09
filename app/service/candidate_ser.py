@@ -12,10 +12,13 @@ from app.tasks.ocr_tasks import ocr_parse_resume_task
 from app.schemas.position_schema import PositionSchema
 from app.schemas.user_schema import UserSH
 from utils.PDFser import WordToPdfConverter
+import logging
+
 import aiofiles
-from loguru import logger
 from redis.asyncio import Redis
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 

@@ -4,7 +4,6 @@ from app.models.candidate import ResumeModel
 from app.schemas.candidate_schema import TaskInfoSchema
 from app.schemas.agent_schema import AgentCandidateSchema
 from utils.ORC_ser import PaddleOcr
-from loguru import logger
 from app.agents.resume import extract_candidate_info
 
 

@@ -33,9 +33,11 @@ from app.repository.Interview_repo import InterviewRepo
 from app.repository.resume_repo import CandidateAIScoreRepo, CandidateRepo
 
 
-from loguru import logger
+import logging
 from datetime import datetime, timedelta
 import json
+
+logger = logging.getLogger(__name__)
 
 
 from utils.time_ISO8601_datatime import iso8601_to_datetime_beijing, now_beijing, to_naive_beijing

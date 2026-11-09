@@ -1,3 +1,5 @@
+import logging
+
 from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
 from app.core.exceptions import AppException, ExternalServiceError
@@ -7,10 +9,10 @@ from app.repository.resume_repo import CandidateRepo
 from app.schemas.candidate_schema import CandidateSchema
 from app.schemas.position_schema import PositionSchema
 from app.schemas.user_schema import UserSH
-from loguru import logger
-
 from app.core.checkpointer import get_checkpointer
 from app.workflow.candidate_graph import build_candidate_graph
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -34,8 +36,9 @@ async def _mark_processing_error(candidate_id: str, error_msg: str) -> None:
                 )
         logger.info(f"候选人 {candidate_id} 已标记为处理异常")
     except Exception as e:
-        logger.opt(exception=True).critical(
-            f"标记候选人 {candidate_id} 处理异常状态失败: {e}"
+        logger.critical(
+            f"标记候选人 {candidate_id} 处理异常状态失败: {e}",
+            exc_info=True,
         )
 
 
@@ -93,8 +96,9 @@ async def run_candidate_agent(
             return res
         except (ExternalServiceError, AppException) as e:
             # 注意：不 re-raise！BackgroundTasks 会吞掉异常，raise 毫无意义。
-            logger.opt(exception=True).error(
-                f"[agent_task] candidate_id={candidate.id} | infra_error={e.message} | code={e.code}"
+            logger.error(
+                f"[agent_task] candidate_id={candidate.id} | infra_error={e.message} | code={e.code}",
+                exc_info=True,
             )
             await _mark_processing_error(candidate.id, e.message)
             return None
@@ -140,8 +144,9 @@ async def run_candidate_agent(
 
         except (ExternalServiceError, AppException) as e:
             # 注意：不 re-raise！BackgroundTasks 会吞掉异常，raise 毫无意义。
-            logger.opt(exception=True).error(
-                f"[agent_task] candidate_id={candidate.id} | infra_error={e.message} | code={e.code}"
+            logger.error(
+                f"[agent_task] candidate_id={candidate.id} | infra_error={e.message} | code={e.code}",
+                exc_info=True,
             )
             await _mark_processing_error(candidate.id, e.message)
             return None

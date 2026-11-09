@@ -6,11 +6,12 @@ timeout=30 防止发信时网络卡死把整条链路挂住。
 from __future__ import annotations
 
 import asyncio
+import logging
 import smtplib
 from email.message import EmailMessage
 from typing import Optional
 
-from loguru import logger
+logger = logging.getLogger(__name__)
 
 
 class SmtpClient:
@@ -80,11 +81,11 @@ class SmtpClient:
                 return
             except smtplib.SMTPServerDisconnected as e:
                 # 网络层断开（连接被服务端超时踢掉）：属于可恢复错误，重连重试
-                logger.warning("SMTP disconnected, reconnecting & retrying: {}", e)
+                logger.warning("SMTP disconnected, reconnecting & retrying: %s", e)
             except smtplib.SMTPException as e:
                 # 5xx 之类是硬性错误（认证失败/收件人不存在/内容被拒），
                 # 重试无意义，直接抛给上层
-                logger.error("SMTP rejected message: {}", e)
+                logger.error("SMTP rejected message: %s", e)
                 raise
 
             await self._reconnect_locked()

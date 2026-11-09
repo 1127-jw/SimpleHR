@@ -3,8 +3,10 @@ from langchain.agents.middleware import ModelFallbackMiddleware
 from app.agents.llms import qwen_llm, deepseek_llm
 from app.agents.prompts import EXTRACT_CANDIDATE_SYSTEM_PROMPT
 from app.schemas.agent_schema import AgentCandidateSchema
-from loguru import logger
+import logging
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+logger = logging.getLogger(__name__)
 
 
 agent = create_agent(

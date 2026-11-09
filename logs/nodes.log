@@ -73,3 +73,26 @@
 2026-11-08 18:06:50 | INFO     | workflow.nodes:check_availability_node:245 | MainThread | [check_avail] candidate refused | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
 2026-11-08 18:06:50 | INFO     | workflow.nodes:refused_node:32 | MainThread | [refused] start | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
 2026-11-08 18:06:50 | INFO     | workflow.nodes:refused_node:41 | MainThread | [refused] status updated | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
+2026-11-09 20:37:02 | INFO     | workflow.nodes:screening_node:15 | MainThread | [screening] start | candidate_id=dzXGaDEgwoGaYLksivF3aW
+2026-11-09 20:37:02 | INFO     | workflow.nodes:screening_node:30 | MainThread | [screening] passed | candidate_id=dzXGaDEgwoGaYLksivF3aW
+2026-11-09 20:37:02 | INFO     | workflow.nodes:scoring_node:48 | MainThread | [scoring] start | candidate_id=dzXGaDEgwoGaYLksivF3aW | threshold=7
+2026-11-09 20:37:05 | INFO     | workflow.nodes:scoring_node:65 | MainThread | [scoring] LLM scored | candidate_id=dzXGaDEgwoGaYLksivF3aW | overall_score=8
+2026-11-09 20:37:05 | INFO     | workflow.nodes:scoring_node:94 | MainThread | [scoring] score saved to DB | candidate_id=dzXGaDEgwoGaYLksivF3aW
+2026-11-09 20:37:05 | INFO     | workflow.nodes:scoring_node:98 | MainThread | [scoring] done | candidate_id=dzXGaDEgwoGaYLksivF3aW | score=8 | next_stage=email_invite
+2026-11-09 20:37:05 | INFO     | workflow.nodes:email_invite_node:50 | MainThread | [email_invite] start | candidate_id=dzXGaDEgwoGaYLksivF3aW
+2026-11-09 20:37:06 | INFO     | workflow.nodes:email_invite_node:85 | MainThread | [email_invite] proposed time | candidate_id=dzXGaDEgwoGaYLksivF3aW | time=2026-11-10 09:00:00+08:00
+2026-11-09 20:37:06 | INFO     | workflow.nodes:email_invite_node:102 | MainThread | [email_invite] invite sent | candidate_id=dzXGaDEgwoGaYLksivF3aW
+2026-11-09 20:37:06 | INFO     | workflow.nodes:get_candidate_email_reply_node:129 | asyncio_1 | [email_reply] waiting for candidate reply | candidate_id=dzXGaDEgwoGaYLksivF3aW
+2026-11-09 20:37:43 | INFO     | workflow.nodes:get_candidate_email_reply_node:129 | asyncio_1 | [email_reply] waiting for candidate reply | candidate_id=dzXGaDEgwoGaYLksivF3aW
+2026-11-09 20:37:43 | INFO     | workflow.nodes:get_candidate_email_reply_node:133 | asyncio_1 | [email_reply] resumed | candidate_id=dzXGaDEgwoGaYLksivF3aW | reply=候选人回复了以下邮件，请根据回复内容决定下一步操作：
+
+主题：回复：面试邀请-协商面试时间
+
+内容：11日下午3点可以吗
+2026-11-09 20:37:43 | INFO     | workflow.nodes:check_availability_node:235 | MainThread | [check_avail] start | candidate_id=dzXGaDEgwoGaYLksivF3aW
+2026-11-09 20:37:45 | INFO     | workflow.nodes:check_availability_node:269 | MainThread | [check_avail] checking availability | candidate_id=dzXGaDEgwoGaYLksivF3aW | proposed=2026-11-11 15:00:00+08:00 | exactly=hours
+2026-11-09 20:37:45 | INFO     | workflow.nodes:check_availability_node:311 | MainThread | [check_avail] slot available | candidate_id=dzXGaDEgwoGaYLksivF3aW | time=2026-11-11 15:00:00+08:00
+2026-11-09 20:37:45 | INFO     | workflow.nodes:confirm_node:34 | MainThread | [confirm] start | candidate_id=dzXGaDEgwoGaYLksivF3aW
+2026-11-09 20:37:45 | INFO     | workflow.nodes:confirm_node:62 | MainThread | [confirm] interview record created | candidate_id=dzXGaDEgwoGaYLksivF3aW
+2026-11-09 20:37:46 | INFO     | workflow.nodes:confirm_node:97 | MainThread | [confirm] calendar created | candidate_id=dzXGaDEgwoGaYLksivF3aW
+2026-11-09 20:37:46 | INFO     | workflow.nodes:confirm_node:123 | MainThread | [confirm] done | candidate_id=dzXGaDEgwoGaYLksivF3aW

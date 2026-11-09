@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 from urllib.parse import quote, urljoin
 from redis.asyncio import Redis
 import httpx
-from loguru import logger
+import logging
 from typing import cast, Any
 from app.repository.user_repo import UserRepo
 from app.core.config import get_settings
@@ -18,6 +18,8 @@ from app.core.exceptions import DingTalkServiceError
 from app.models import DingdingUserModel
 from utils.available_time import find_available_slot
 from utils.time_ISO8601_datatime import datetime_to_iso8601_beijing, iso8601_to_datetime_beijing, now_beijing
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 

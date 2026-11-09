@@ -5,10 +5,13 @@ from typing import List
 
 from app.core.config import get_settings
 
-import httpx
 import asyncio
-from loguru import logger
+import logging
+
+import httpx
 from langchain_openai import ChatOpenAI
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 

@@ -40,7 +40,7 @@
 | OCR / 文档 | PaddleOCR、PyMuPDF、pywin32（Word→PDF） |
 | 邮件 | aiosmtplib、imaplib、APScheduler（轮询调度） |
 | 钉钉 | alibabacloud-dingtalk SDK + httpx |
-| 日志 | Loguru + 标准库 logging（文件轮转） |
+| 日志 | 标准库 logging（文件轮转 + 分级） |
 
 ---
 

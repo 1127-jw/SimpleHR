@@ -22,7 +22,7 @@
 $env:MAIL_USERNAME = "you@qq.com"
 $env:MAIL_PASSWORD = "邮箱授权码"   # 不是登录密码
 cd my_mailbot
-pip install pydantic loguru
+pip install pydantic
 python main.py
 ```
 

@@ -10,7 +10,6 @@ from app.core.config import get_settings
 from app.models.user import UserModel
 from uuid import uuid4
 from app.schemas.candidate_schema import CandidateListSchema, CandidateStatusUpdateSchema, CandidateAIScoreRespSchema
-from loguru import logger
 from utils.time_ISO8601_datatime import now_beijing
 
 from app.schemas.candidate_schema import ResumeUploadRespSchema, ResumePaseSchema, ResumeParseTaskRespSchema, \

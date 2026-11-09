@@ -1,7 +1,10 @@
+import logging
+
 from fastapi_mail import FastMail, MessageSchema
 from aiosmtplib import SMTPResponseException
-from loguru import logger
 from app.core.mail import create_mail_instance, settings
+
+logger = logging.getLogger(__name__)
 
 
 async def send_email_task(message: MessageSchema):
