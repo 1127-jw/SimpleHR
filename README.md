@@ -391,6 +391,7 @@ AI 评分通过 → 发邀请邮件（附建议时间）
 | [`docs/workflow_email_integration.md`](docs/workflow_email_integration.md) | 邮件机器人与招聘工作流的集成说明 |
 | [`docs/workflow_fixes.md`](docs/workflow_fixes.md) | 工作流历史问题修复记录 |
 | [`CHANGES.md`](CHANGES.md) | 阈值配置化 + 异常处理重构的完整改动记录 |
+| [`docs/deployment.md`](docs/deployment.md) | 生产部署方案（裸机 / Docker 双版）：环境准备、Nginx/Caddy 配置、systemd、Compose 编排、备份升级、故障排查 |
 
 ---
 

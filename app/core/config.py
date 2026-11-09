@@ -57,63 +57,62 @@ class Settings(BaseSettings):
     # 生产环境示例：
     #   PostgreSQL -> postgres://user:password@localhost:5432/dbname
     #   MySQL      -> mysql://root:password@127.0.0.1:3306/oaapi
-    DB_USERNAME: str = "postgres"
-    DB_PASSWORD: str = "root"
-    DB_HOST: str = "127.0.0.1"
-    DB_PORT: int = 5432
-    DB_NAME: str = "hr_system"
+    DB_USERNAME: str = Field(default="postgres", description="数据库用户名")
+    DB_PASSWORD: str = Field(default="root", description="数据库密码")
+    DB_HOST: str = Field(default="127.0.0.1", description="数据库地址")
+    DB_PORT: int = Field(default=5432, description="数据库端口")
+    DB_NAME: str = Field(default="hr_system", description="数据库名")
 
     # ---------- JWT ----------
-    ACCESS_SECRET: str = ""
-    REFRESH_SECRET: str = ""
-    ALGORITHM: str = "HS256"
-    ACCESS_EXPIRE_MINUTES: int = 30
-    REFRESH_EXPIRE_DAYS: int = 7
+    ACCESS_SECRET: str = Field(default="", description="access_token 加盐")
+    REFRESH_SECRET: str = Field(default="", description="refresh_token 加盐")
+    ALGORITHM: str = Field(default="HS256", description="加密算法")
+    ACCESS_EXPIRE_MINUTES: int = Field(default=30, description="access_token过期时间（分钟）")
+    REFRESH_EXPIRE_DAYS: int = Field(default=7, description="refresh_token过期时间（天）")
 
     # ---------- Redis ----------
-    REDIS_HOST: str = "localhost"
-    REDIS_PORT: int = 6379
-    REDIS_DB: int =  0
+    REDIS_HOST: str = Field(default="localhost", description="redis地址")
+    REDIS_PORT: int = Field(default=6379, description="redis端口")
+    REDIS_DB: int = Field(default=0, description="redis数据库号")
 
     # ---------- Email(网易163) ----------
-    MAIL_USERNAME: str = Field(..., validation_alias="MAIL_USERNAME")
-    MAIL_PASSWORD: str = Field(..., validation_alias="MAIL_PASSWORD")
-    MAIL_FROM: str = Field(..., validation_alias="MAIL_FROM")
-    MAIL_PORT: int = 465
-    MAIL_SERVER: str = "smtp.163.com"
-    MAIL_FROM_NAME: str = "SimpleHR"
-    MAIL_STARTTLS: bool = False
-    MAIL_SSL_TLS: bool = True
+    MAIL_USERNAME: str = Field(default="", description="邮箱用户名")
+    MAIL_PASSWORD: str = Field(default="", description="邮箱密码")
+    MAIL_FROM: str = Field(default="", description="发件人")
+    MAIL_PORT: int = Field(default=465, description="端口")
+    MAIL_SERVER: str = Field(default="smtp.163.com", description="邮箱服务器")
+    MAIL_FROM_NAME: str = Field(default="SimpleHR", description="发件人显示名称")
+    MAIL_STARTTLS: bool = Field(default=False, description="先明文建连，再升级加密")
+    MAIL_SSL_TLS: bool = Field(default=True, description="连接一开始就是加密的")
 
     # ---------- 邀请码 ----------
-    INVITE_EXPIRE_MINUTES: int = 30
+    INVITE_EXPIRE_MINUTES: int = Field(default=30, description="邀请码过期时间（分钟）")
 
     # ---------- 钉钉 ----------
-    DINGTALK_CLIENT_ID:str = ""
-    DINGTALK_CLIENT_SECRET:str = ""
+    DINGTALK_CLIENT_ID: str = Field(default="", description="钉钉应用 Client ID")
+    DINGTALK_CLIENT_SECRET: str = Field(default="", description="钉钉应用 Client Secret")
     #内网穿刺
-    BACKEND_BASE_URL: str =""
+    BACKEND_BASE_URL: str = Field(default="", description="后端基础 URL")
 
     # ---------- 文件上传 ----------
-    RESUME_DIR:str = os.path.join(BASE_DIR, "upload")
+    RESUME_DIR: str = Field(default=os.path.join(BASE_DIR, "upload"), description="简历上传目录")
 
-    PADDLE_OCR_ACCESS_TOKEN:str=""
-
-    DASHSCOPE_API_KEY:str=""
+    PADDLE_OCR_ACCESS_TOKEN: str = Field(default="", description="PaddleOCR 访问令牌")
+    DASHSCOPE_API_KEY: str = Field(default="", description="DashScope API Key")
 
     # ---------- agent/graph ----------
-    GRAPH_OPEN:bool = False
+    GRAPH_OPEN: bool = Field(default=False, description="是否开启图模式")
 
     # ---------- 招聘流程阈值 ----------
-    SCORE_PASS_THRESHOLD: int = 7          # AI 评分通过阈值（overall_score > 该值视为通过）
-    MAX_NEGOTIATION_ROUNDS: int = 3        # 面试时间协商轮次上限
-    EMAIL_REPLY_TIMEOUT: str = "TIMEOUT"   # interrupt 超时恢复标记
+    SCORE_PASS_THRESHOLD: int = Field(default=7, description="AI 评分通过阈值（overall_score > 该值视为通过）")
+    MAX_NEGOTIATION_ROUNDS: int = Field(default=3, description="面试时间协商轮次上限")
+    EMAIL_REPLY_TIMEOUT: str = Field(default="TIMEOUT", description="interrupt 超时恢复标记")
 
     # ---------- 面试时间窗口（24小时制） ----------
-    AM_WINDOW_START_HOUR: int = 9          # 上午面试窗口开始
-    AM_WINDOW_END_HOUR: int = 12           # 上午面试窗口结束
-    PM_WINDOW_START_HOUR: int = 14         # 下午面试窗口开始
-    PM_WINDOW_END_HOUR: int = 18           # 下午面试窗口结束
+    AM_WINDOW_START_HOUR: int = Field(default=9, description="上午面试窗口开始")
+    AM_WINDOW_END_HOUR: int = Field(default=12, description="上午面试窗口结束")
+    PM_WINDOW_START_HOUR: int = Field(default=14, description="下午面试窗口开始")
+    PM_WINDOW_END_HOUR: int = Field(default=18, description="下午面试窗口结束")
 
     @computed_field
     @property
@@ -146,4 +145,3 @@ from functools import lru_cache
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-
