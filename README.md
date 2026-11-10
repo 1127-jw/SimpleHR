@@ -21,7 +21,7 @@
 | **钉钉深度集成** | OAuth2 扫码授权、日历读取空闲时段、自动创建面试日程 |
 | **邮件机器人** | 自研异步 IMAP/SMTP 邮件机器人，长连接 + 断线自愈 + 关键词规则监听；收到候选人回复后通过 `Command(resume=...)` 恢复状态图 |
 | **JWT 双令牌认证** | Access + Refresh Token，Redis 黑名单吊销，pwdlib Argon2 密码哈希 |
-| **结构化日志** | 节点/路由全链路 `candidate_id` 追踪，文件按天轮转 + 错误单独归档 |
+| **非阻塞结构化日志** | 队列异步落盘，不阻塞业务线程 / 事件循环；节点日志独立归档；多进程安全（独立监听进程统一写盘） |
 
 ---
 
@@ -40,7 +40,8 @@
 | OCR / 文档 | PaddleOCR、PyMuPDF、pywin32（Word→PDF） |
 | 邮件 | aiosmtplib、imaplib、APScheduler（轮询调度） |
 | 钉钉 | alibabacloud-dingtalk SDK + httpx |
-| 日志 | 标准库 logging（文件轮转 + 分级） |
+| 日志 | 标准库 logging（QueueHandler 非阻塞 + 文件轮转 + 分级） |
+| 进程管理 | uvicorn（单进程）/ gunicorn（多进程，生产推荐） |
 
 ---
 
@@ -125,7 +126,7 @@ simplejob/
 │   │   ├── exceptions.py        # 自定义异常层级
 │   │   ├── redis_client.py      # Redis 连接池
 │   │   ├── checkpointer.py      # LangGraph 检查点
-│   │   ├── logging_config.py    # 日志配置（轮转）
+│   │   ├── logging_config.py    # 日志配置（非阻塞队列 + 轮转 + 分级）
 │   │   └── mail.py              # FastMail 事务邮件
 │   ├── models/                  # SQLAlchemy ORM 模型
 │   ├── schemas/                 # Pydantic 请求/响应模型
@@ -149,6 +150,7 @@ simplejob/
 ├── upload/                      # 简历文件存储
 ├── attachments/                 # 邮件附件存储
 ├── .env                         # 本地配置（已在 .gitignore 中）
+├── gunicorn.conf.py             # 多进程部署配置（主进程接管日志）
 ├── pyproject.toml
 └── README.md
 ```
@@ -215,6 +217,9 @@ PM_WINDOW_END_HOUR=18
 
 # 工作流开关：True=LangGraph 状态图，False=旧 Agent 模式
 GRAPH_OPEN=True
+
+# 节点日志 logger 名（可选，默认 workflow.nodes）
+NODE_LOGGER_NAME=workflow.nodes
 ```
 
 ### 3. 初始化数据库
@@ -238,6 +243,16 @@ uv run uvicorn app.main:app --reload
 > Windows 下代码已自动切换 `WindowsSelectorEventLoopPolicy`，解决 psycopg 的 ProactorEventLoop 兼容问题。
 
 访问 `http://127.0.0.1:8000/docs` 查看自动生成的 Swagger 文档。
+
+> **生产多进程部署**（可选）：用 gunicorn，日志由主进程统一接管：
+>
+> ```bash
+> uv run gunicorn app.main:app -c gunicorn.conf.py
+> ```
+>
+> ⚠️ 不要用 `uvicorn --workers N` —— uvicorn 以 spawn 启动 worker，
+> 拿不到共享日志队列，会退化成每个 worker 各写各的日志文件。
+> 详见 [`docs/deployment.md`](docs/deployment.md)。
 
 ---
 
@@ -332,9 +347,29 @@ AI 评分通过 → 发邀请邮件（附建议时间）
 | 上午面试窗口 | `AM_WINDOW_START_HOUR` / `AM_WINDOW_END_HOUR` | 9 / 12 | 用于校验「上午」类模糊时间 |
 | 下午面试窗口 | `PM_WINDOW_START_HOUR` / `PM_WINDOW_END_HOUR` | 14 / 18 | 用于校验「下午」类模糊时间 |
 | 工作流开关 | `GRAPH_OPEN` | False | `True` 启用 LangGraph 状态图 |
+| 节点日志 logger 名 | `NODE_LOGGER_NAME` | `workflow.nodes` | 决定哪些记录写入 `logs/nodes.log` |
 | Access Token 有效期 | `ACCESS_EXPIRE_MINUTES` | 30 | 分钟 |
 | Refresh Token 有效期 | `REFRESH_EXPIRE_DAYS` | 7 | 天 |
 | 邀请码有效期 | `INVITE_EXPIRE_MINUTES` | 30 | 分钟 |
+
+---
+
+## 📋 日志系统
+
+日志采用「**队列 + 独立监听进程/线程**」架构，业务线程只入队、不直接写盘：
+
+```
+logger.info(...) → QueueHandler → 队列 → 监听进程/线程 → 文件
+```
+
+- **非阻塞**：调用方只做 `queue.put_nowait`，磁盘 IO 不阻塞业务线程与 asyncio 事件循环
+- **多进程安全**：gunicorn 部署时由主进程创建 `multiprocessing.Queue` 并启动**独立的日志监听进程**，全局唯一写盘者，worker 不会互相覆盖
+- **分级归档**：`workflow.log`（全量，按天）/ `error.log`（错误，按大小）/ `nodes.log`（节点执行，按天）
+- **可配置**：节点 logger 名由 `NODE_LOGGER_NAME` 控制，logger 与分流过滤器同源，改名后路由自动跟随
+
+单进程（`uvicorn --workers 1`）下退化为进程内监听线程，同样只有一个写入者。
+
+详见 [`docs/logging_system.md`](docs/logging_system.md)。
 
 ---
 
@@ -387,11 +422,10 @@ AI 评分通过 → 发邀请邮件（附建议时间）
 | 文档 | 内容 |
 |------|------|
 | [`docs/error_handling_design.md`](docs/error_handling_design.md) | 分层异常架构、节点安全网、BackgroundTask 安全、PROCESSING_ERROR、@wraps、结构化日志、error_node 防御性 7 大亮点详解 |
-| [`docs/workflow_refactor_plan.md`](docs/workflow_refactor_plan.md) | 从 Agent 重构为 StateGraph 的设计方案（含 Interrupt 审批、批量并行、LangSmith 集成规划） |
+| [`docs/logging_system.md`](docs/logging_system.md) | 日志系统：非阻塞队列、独立监听进程、多进程安全、分流与轮转 |
 | [`docs/workflow_email_integration.md`](docs/workflow_email_integration.md) | 邮件机器人与招聘工作流的集成说明 |
 | [`docs/workflow_fixes.md`](docs/workflow_fixes.md) | 工作流历史问题修复记录 |
-| [`CHANGES.md`](CHANGES.md) | 阈值配置化 + 异常处理重构的完整改动记录 |
-| [`docs/deployment.md`](docs/deployment.md) | 生产部署方案（裸机 / Docker 双版）：环境准备、Nginx/Caddy 配置、systemd、Compose 编排、备份升级、故障排查 |
+| [`docs/deployment.md`](docs/deployment.md) | 生产部署方案（裸机 / Docker 双版）：环境准备、Nginx/Caddy 配置、systemd、Compose 编排、备份升级、故障排查、gunicorn 多进程 |
 
 ---
 
@@ -402,6 +436,7 @@ AI 评分通过 → 发邀请邮件（附建议时间）
 - `app/main.py` / `app/core/db.py` 中设置 `WindowsSelectorEventLoopPolicy`，解决 psycopg 在 ProactorEventLoop 下的兼容问题
 - 强制 uvicorn 使用 `SelectorEventLoop`
 - Word → PDF 转换使用 `pywin32`（仅 Windows 可用）
+- gunicorn 依赖 `os.fork`，**Windows 上不可用** —— 只能单进程运行 `uvicorn --workers 1`
 
 ---
 

@@ -107,7 +107,7 @@ def _build_handlers(
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     console.setFormatter(formatter)
-    console.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=False))
+    console.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=True))
 
     # ---- 全量日志（按天轮转，保留 30 天）----
     app_file = timed_cls(
@@ -121,7 +121,7 @@ def _build_handlers(
     app_file.setLevel(logging.DEBUG)
     app_file.setFormatter(formatter)
     app_file.suffix = "%Y-%m-%d"
-    app_file.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=False))
+    app_file.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=True))
 
     # ---- 错误日志单独文件（按大小轮转，保留 90 天）----
     error_file = size_cls(
@@ -132,7 +132,7 @@ def _build_handlers(
     )
     error_file.setLevel(logging.ERROR)
     error_file.setFormatter(formatter)
-    error_file.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=False))
+    error_file.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=True))
 
     # ---- 节点执行专用日志（只写 nodes.log）----
     node_file = timed_cls(
