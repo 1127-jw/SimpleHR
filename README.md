@@ -244,6 +244,15 @@ uv run uvicorn app.main:app --reload
 
 访问 `http://127.0.0.1:8000/docs` 查看自动生成的 Swagger 文档。
 
+### 6. 运行测试
+
+```bash
+uv run pytest          # 46 个用例，约 4 秒
+```
+
+测试不依赖数据库 / Redis / 网络：用内存版 Redis 与纯函数覆盖路由、异常包装、
+Token 生命周期与日志分流。
+
 > **生产多进程部署**（可选）：用 gunicorn，日志由主进程统一接管：
 >
 > ```bash
@@ -364,7 +373,8 @@ logger.info(...) → QueueHandler → 队列 → 监听进程/线程 → 文件
 
 - **非阻塞**：调用方只做 `queue.put_nowait`，磁盘 IO 不阻塞业务线程与 asyncio 事件循环
 - **多进程安全**：gunicorn 部署时由主进程创建 `multiprocessing.Queue` 并启动**独立的日志监听进程**，全局唯一写盘者，worker 不会互相覆盖
-- **分级归档**：`workflow.log`（全量，按天）/ `error.log`（错误，按大小）/ `nodes.log`（节点执行，按天）
+- **分级归档**：`workflow.log`（全量，按天）/ `error.log`（错误，按大小）/ `nodes.log`（节点执行，按天）/ `audit.log`（安全审计，JSON Lines）
+- **可追溯**：每个请求分配 `X-Request-ID`，日志里带 `req=<id>`；登录、登出、简历下载等安全操作写入 `audit.log`
 - **可配置**：节点 logger 名由 `NODE_LOGGER_NAME` 控制，logger 与分流过滤器同源，改名后路由自动跟随
 
 单进程（`uvicorn --workers 1`）下退化为进程内监听线程，同样只有一个写入者。
@@ -423,6 +433,8 @@ logger.info(...) → QueueHandler → 队列 → 监听进程/线程 → 文件
 |------|------|
 | [`docs/error_handling_design.md`](docs/error_handling_design.md) | 分层异常架构、节点安全网、BackgroundTask 安全、PROCESSING_ERROR、@wraps、结构化日志、error_node 防御性 7 大亮点详解 |
 | [`docs/logging_system.md`](docs/logging_system.md) | 日志系统：非阻塞队列、独立监听进程、多进程安全、分流与轮转 |
+| [`docs/changes_summary.md`](docs/changes_summary.md) | 本轮改造总览：日志演进、安全加固、质量修复、测试与已知限制 |
+| [`docs/ops_plan.md`](docs/ops_plan.md) | 部署 / CI / 集成测试 / 监控 的落地方案（含制品、流水线、告警规则、排期） |
 | [`docs/workflow_email_integration.md`](docs/workflow_email_integration.md) | 邮件机器人与招聘工作流的集成说明 |
 | [`docs/workflow_fixes.md`](docs/workflow_fixes.md) | 工作流历史问题修复记录 |
 | [`docs/deployment.md`](docs/deployment.md) | 生产部署方案（裸机 / Docker 双版）：环境准备、Nginx/Caddy 配置、systemd、Compose 编排、备份升级、故障排查、gunicorn 多进程 |

@@ -161,7 +161,7 @@ async def get_access_token(
         r = await get_redis()
         access_token_info = await get_user_access_token(interviewer.id, r)
     except Exception as e:
-        logger.error(f"获取钉钉 access_token 失败: {e}")
+        logger.error("获取钉钉 access_token 失败: %s", e)
         raise DingTalkTokenError(f"获取钉钉 access_token 失败: {e}") from e
 
     return union_id, access_token_info
@@ -202,7 +202,7 @@ async def get_interviewer_available_slot(
     except DingTalkServiceError:
         raise
     except Exception as e:
-        logger.error(f"获取面试官日历失败: {e}")
+        logger.error("获取面试官日历失败: %s", e)
         raise DingTalkServiceError(f"获取面试官日历失败: {e}") from e
 
     if not available_slots:
@@ -250,7 +250,7 @@ async def send_interview_email(
             text=body,
         )
     except Exception as e:
-        logger.error(f"发送面试邀请邮件失败: {e}")
+        logger.error("发送面试邀请邮件失败: %s", e)
         raise EmailSendError(f"发送面试邀请邮件失败: {e}") from e
 
     return f"面试邀请邮件已发送，初步面试时间：{interview_datetime_str}"
@@ -300,7 +300,7 @@ async def confirm_interview_time(
             text=body,
         )
     except Exception as e:
-        logger.error(f"发送面试确认邮件失败: {e}")
+        logger.error("发送面试确认邮件失败: %s", e)
         raise EmailSendError(f"发送面试确认邮件失败: {e}") from e
 
     # 2. 获取钉钉 token
@@ -320,7 +320,7 @@ async def confirm_interview_time(
     except DingTalkServiceError:
         raise
     except Exception as e:
-        logger.error(f"创建钉钉日程失败: {e}")
+        logger.error("创建钉钉日程失败: %s", e)
         raise DingTalkServiceError(f"创建钉钉日程失败: {e}") from e
 
     # 4. 创建面试记录 + 更新候选人状态
@@ -340,7 +340,7 @@ async def confirm_interview_time(
                     status=CandidateStatusEnum.WAITING_FOR_INTERVIEW,
                 )
     except Exception as e:
-        logger.error(f"创建面试记录失败: {e}")
+        logger.error("创建面试记录失败: %s", e)
         raise InterviewSchedulingError(
             f"创建面试记录失败: {e}"
         ) from e
@@ -371,7 +371,7 @@ async def refuse_interview(
                     status=CandidateStatusEnum.REFUSED_INTERVIEW,
                 )
     except Exception as e:
-        logger.error(f"更新候选人拒绝状态失败: {e}")
+        logger.error("更新候选人拒绝状态失败: %s", e)
         raise InterviewSchedulingError(
             f"更新候选人 {candidate.id} 拒绝状态失败: {e}"
         ) from e

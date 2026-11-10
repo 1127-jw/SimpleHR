@@ -25,6 +25,12 @@ class ResumeRepo(BaseRepo):
             raise ValueError(f"Resume not found: {resume_id}")
         return cast(ResumeModel, resume)
 
+    async def get_by_id_or_none(self, resume_id: str) -> ResumeModel | None:
+        """按 id 取简历，不存在返回 None（不做异常）。"""
+        return await self.session.scalar(
+            select(ResumeModel).where(ResumeModel.id == resume_id)
+        )
+
 
 class CandidateRepo(BaseRepo):
     async def create_candidate(self, candidate_info: dict) -> CandidateModel:
@@ -67,48 +73,67 @@ class CandidateRepo(BaseRepo):
             )
         )
 
+    async def _visible_stmt(self, current_user: UserModel):
+        """候选人可见性条件。
+
+        - superuser：全部
+        - hr：所负责部门的候选人
+        - 其他：自己发布的职位的候选人
+        """
+        stmt = select(CandidateModel)
+        if current_user.is_superuser:
+            return stmt
+
+        stmt = stmt.join(PositionModel)
+        if current_user.is_hr:
+            hr_user = await self.session.scalar(
+                select(UserModel)
+                .where(UserModel.id == current_user.id)
+                .options(selectinload(UserModel.managed_departments))
+            )
+            department_ids = [d.id for d in hr_user.managed_departments]
+            if not department_ids:
+                # 没有负责部门：用恒假条件代替「提前 return []」，保证 count 也是 0
+                return stmt.where(CandidateModel.id.is_(None))
+            return stmt.where(PositionModel.department_id.in_(department_ids))
+
+        return stmt.where(PositionModel.creator_id == current_user.id)
+
     async def get_list(
         self,
         current_user: UserModel,
         position_id: str|None = None,
         status: CandidateStatusEnum|None = None,
         page: int = 1,
-        size: int = 10
-    ):
-        stmt = select(CandidateModel)
-        # 按照用户的角色来查找数据
-        # 1. 如果是superuser，那么可以获取所有的候选人
-        # 2. 如果是hr，那么可以获取所负责部门的候选人
-        # 3. 如果是部门成员，那么可以获取自己发布的职位的候选人
-        if current_user.is_superuser:
-            pass
-        elif current_user.is_hr:
-            hr_user = await self.session.scalar(
-                select(UserModel)
-                .where(UserModel.id == current_user.id)
-                .options(selectinload(UserModel.managed_departments))
-            )
-            # 提取hr所负责的部门的id
-            managed_department_ids = [
-                d.id for d in hr_user.managed_departments
-            ]
-            if len(managed_department_ids) == 0:
-                return []
-            # 用连接的形式过滤候选人
-            stmt = stmt.join(PositionModel).where(PositionModel.department_id.in_(managed_department_ids))
-        else:
-            # 普通成员
-            stmt = stmt.join(PositionModel).where(PositionModel.creator_id == current_user.id)
+        size: int = 10,
+    ) -> tuple[list[CandidateModel], int]:
+        """返回 (当前页数据, 符合条件的总数)。"""
+        stmt = await self._visible_stmt(current_user)
 
         if position_id is not None:
             stmt = stmt.where(CandidateModel.position_id == position_id)
-
         if status is not None:
             stmt = stmt.where(CandidateModel.status == status)
 
+        total = await self.session.scalar(
+            select(func.count()).select_from(stmt.subquery())
+        ) or 0
+
         offset = (page - 1) * size
-        stmt = stmt.offset(offset).limit(size).order_by(CandidateModel.created_at.desc())
-        return await self.session.scalars(stmt)
+        rows = await self.session.scalars(
+            stmt.order_by(CandidateModel.created_at.desc()).offset(offset).limit(size)
+        )
+        return list(rows), total
+
+    async def get_for_user(
+        self, candidate_id: str, current_user: UserModel
+    ) -> CandidateModel | None:
+        """按用户权限取单个候选人；不可见时返回 None。"""
+        stmt = await self._visible_stmt(current_user)
+        stmt = stmt.where(CandidateModel.id == candidate_id).options(
+            selectinload(CandidateModel.resume)
+        )
+        return await self.session.scalar(stmt)
 
     async def candidate_count(self, start_time: datetime, end_time: datetime):
         stmt = select(

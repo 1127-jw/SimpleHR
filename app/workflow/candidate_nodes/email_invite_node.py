@@ -1,15 +1,15 @@
 import logging
-from app.core.config import get_settings
 from datetime import datetime
 
-settings = get_settings()
-logger = logging.getLogger(settings.NODE_LOGGER_NAME)
-
+from app.core.config import get_settings
 from app.core.exceptions import DingTalkServiceError, EmailSendError
 from app.service.dingtalk_ser import get_user_available_slots
 from app.workflow.candidate_state import CandidateRecruitmentState
 from app.workflow.error_handler import node_error_wrapper
 from utils.time_ISO8601_datatime import now_beijing
+
+settings = get_settings()
+logger = logging.getLogger(settings.NODE_LOGGER_NAME)
 
 
 async def send_interview_email(email: str, body: str) -> None:

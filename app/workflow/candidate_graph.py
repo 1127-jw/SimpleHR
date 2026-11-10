@@ -7,6 +7,8 @@ logger = logging.getLogger(__name__)
 from app.workflow.candidate_state import (
     CandidateRecruitmentState,
     EMAIL_REPLY_TIMEOUT,
+    REPLY_REFUSED,
+    REPLY_TIME_AVAILABLE,
     DEFAULT_SCORE_PASS_THRESHOLD,
     DEFAULT_MAX_NEGOTIATION_ROUNDS,
 )
@@ -21,6 +23,29 @@ from app.workflow.candidate_nodes.negotiation_expired_node import negotiation_ex
 from app.workflow.candidate_nodes.rejected_or_refused_nodes import rejected_node, refused_node
 from app.workflow.candidate_nodes.scoring_node import scoring_node
 from app.workflow.candidate_nodes.screening_node import screening_node
+
+
+def _with_error_check(router):
+    """给路由函数加一层「节点已标记错误 → 直接去 error 节点」的守卫。"""
+
+    def guarded(state: CandidateRecruitmentState) -> str:
+        if state.get("error_occurred"):
+            return "error"
+        return router(state)
+
+    return guarded
+
+
+def _route_after_screening(state: CandidateRecruitmentState) -> str:
+    """screening 节点之后的路由：通过去评分，否则淘汰。"""
+    cid = state["candidate"].id
+    passed = bool(state.get("screening_passed"))
+    dest = "scoring" if passed else "rejected"
+    logger.info(
+        "[route_screening] candidate_id=%s | passed=%s | dest=%s",
+        cid, passed, dest,
+    )
+    return dest
 
 
 def route_after_email_reply(state: CandidateRecruitmentState) -> str:
@@ -39,9 +64,9 @@ def route_after_check_availability(state: CandidateRecruitmentState) -> str:
     """check_availability 分支路由（含协商轮次上限）。"""
     cid = state["candidate"].id
     reply = state.get("candidate_email_reply", "")
-    if reply == "CANDIDATE_REFUSED":
+    if reply == REPLY_REFUSED:
         dest = "refused"
-    elif reply == "SYSTEM_TIME_AVAILABLE":
+    elif reply == REPLY_TIME_AVAILABLE:
         dest = "confirmed"
     else:
         max_rounds = state.get("max_negotiation_rounds") or DEFAULT_MAX_NEGOTIATION_ROUNDS
@@ -111,16 +136,14 @@ def build_candidate_graph(
     # === 条件边：screening → scoring 或 rejected ===
     graph.add_conditional_edges(
         "screening",
-        lambda s: "error" if s.get("error_occurred") else (
-            "scoring" if s["screening_passed"] else "rejected"
-        ),
+        _with_error_check(_route_after_screening),
         {"scoring": "scoring", "rejected": "rejected", "error": "error"}
     )
 
     # === 条件边：scoring → email_invite 或 rejected ===
     graph.add_conditional_edges(
         "scoring",
-        lambda s: "error" if s.get("error_occurred") else _route_after_scoring(s),
+        _with_error_check(_route_after_scoring),
         {"email_invite": "email_invite", "rejected": "rejected", "error": "error"}
     )
 
@@ -130,7 +153,7 @@ def build_candidate_graph(
     # === 收到回复 ===
     graph.add_conditional_edges(
         "get_candidate_email_reply_node",
-        route_after_email_reply,
+        _with_error_check(route_after_email_reply),
         {
             "check_availability": "check_availability",
             "negotiation_expired": "negotiation_expired",
@@ -141,7 +164,7 @@ def build_candidate_graph(
     # === 条件边：check_availability 四分支 ===
     graph.add_conditional_edges(
         "check_availability",
-        lambda s: "error" if s.get("error_occurred") else route_after_check_availability(s),
+        _with_error_check(route_after_check_availability),
         {
             "confirmed": "confirm",
             "refused": "refused",

@@ -38,14 +38,16 @@ import sys
 import threading
 from pathlib import Path
 
-
+from app.core.audit import AUDIT_LOGGER_NAME
 from app.core.config import get_settings
-settings = get_settings()
+from app.core.request_context import get_request_id
 
+settings = get_settings()
 NODE_LOGGER_NAME = settings.NODE_LOGGER_NAME
 
+# 日志目录：**不在导入期创建**，避免「import 一个模块就产生文件系统副作用」。
+# 真正的 mkdir 发生在 _build_handlers()，即只有确实要写日志文件时才建目录。
 LOG_DIR = Path("logs")
-LOG_DIR.mkdir(exist_ok=True)
 
 """
 字段	含义
@@ -55,11 +57,12 @@ LOG_DIR.mkdir(exist_ok=True)
 %(funcName)s	函数名
 %(lineno)d	行号
 %(threadName)s	线程名
+%(request_id)s	请求 ID（由 request_context 注入，非请求上下文时为 "-"）
 %(message)s	日志内容
 """
 LOG_FORMAT = (
     "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | "
-    "%(threadName)s | %(message)s"
+    "%(threadName)s | req=%(request_id)s | %(message)s"
 )
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -73,12 +76,44 @@ _listener_lock = threading.Lock()
 _SHARED_QUEUE: multiprocessing.Queue | None = None
 _LISTENER_PROCESS: multiprocessing.Process | None = None
 
+_record_factory_installed = False
+
+
+def _install_record_factory() -> None:
+    """给每条 LogRecord 挂上 ``request_id``。
+
+    必须在**产生记录的进程**里安装：多进程模式下记录会被序列化后送给监听
+    进程，监听进程的 contextvar 与 worker 无关，所以只能在 worker 侧取值。
+    """
+    global _record_factory_installed
+    if _record_factory_installed:
+        return
+
+    base_factory = logging.getLogRecordFactory()
+
+    def _factory(*args, **kwargs):
+        record = base_factory(*args, **kwargs)
+        record.request_id = get_request_id()
+        return record
+
+    logging.setLogRecordFactory(_factory)
+    _record_factory_installed = True
+
+
+class _RequestIdFilter(logging.Filter):
+    """兜底：确保记录一定带 ``request_id`` 属性，避免格式化时 KeyError。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "request_id"):
+            record.request_id = "-"
+        return True
+
 
 class _LoggerNameFilter(logging.Filter):
     """按 logger 名前缀决定记录是否交给某个 handler。
 
     用于保持原有分流：``workflow.nodes`` 的记录只写 nodes.log，
-    其余记录写 console / workflow.log / error.log。
+    ``audit`` 的记录只写 audit.log，其余记录写 console / workflow.log / error.log。
     """
 
     def __init__(self, prefix: str, include: bool):
@@ -100,14 +135,22 @@ def _build_handlers(
     log_dir 显式传入，避免监听进程因重新导入模块而丢失主进程的目录设置。
     """
     base = Path(log_dir) if log_dir is not None else LOG_DIR
+    base.mkdir(parents=True, exist_ok=True)  # 只在真正要写文件时才建目录
     timed_cls = logging.handlers.TimedRotatingFileHandler
     size_cls = logging.handlers.RotatingFileHandler
+
+    # 业务日志 handler 的公共过滤器：带 request_id + 排除审计记录
+    def _business(handler: logging.Handler) -> logging.Handler:
+        handler.addFilter(_RequestIdFilter())
+        handler.addFilter(_LoggerNameFilter(AUDIT_LOGGER_NAME, include=False))
+        return handler
 
     # ---- 控制台 ----
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     console.setFormatter(formatter)
-    console.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=True))
+    console.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=False))
+    _business(console)
 
     # ---- 全量日志（按天轮转，保留 30 天）----
     app_file = timed_cls(
@@ -121,7 +164,8 @@ def _build_handlers(
     app_file.setLevel(logging.DEBUG)
     app_file.setFormatter(formatter)
     app_file.suffix = "%Y-%m-%d"
-    app_file.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=True))
+    app_file.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=False))
+    _business(app_file)
 
     # ---- 错误日志单独文件（按大小轮转，保留 90 天）----
     error_file = size_cls(
@@ -132,7 +176,8 @@ def _build_handlers(
     )
     error_file.setLevel(logging.ERROR)
     error_file.setFormatter(formatter)
-    error_file.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=True))
+    error_file.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=False))
+    _business(error_file)
 
     # ---- 节点执行专用日志（只写 nodes.log）----
     node_file = timed_cls(
@@ -146,8 +191,23 @@ def _build_handlers(
     node_file.setFormatter(formatter)
     node_file.suffix = "%Y-%m-%d"
     node_file.addFilter(_LoggerNameFilter(NODE_LOGGER_NAME, include=True))
+    _business(node_file)
 
-    return [console, app_file, error_file, node_file]
+    # ---- 安全审计日志（只写 audit.log，JSON Lines）----
+    audit_file = timed_cls(
+        filename=base / "audit.log",
+        when="midnight",
+        interval=1,
+        backupCount=90,
+        encoding="utf-8",
+    )
+    audit_file.setLevel(logging.INFO)
+    audit_file.setFormatter(logging.Formatter("%(message)s"))
+    audit_file.suffix = "%Y-%m-%d"
+    audit_file.addFilter(_RequestIdFilter())
+    audit_file.addFilter(_LoggerNameFilter(AUDIT_LOGGER_NAME, include=True))
+
+    return [console, app_file, error_file, node_file, audit_file]
 
 
 def _detach_handlers(logger: logging.Logger) -> None:
@@ -215,6 +275,7 @@ def bootstrap_logging(
     if _SHARED_QUEUE is not None:
         return _SHARED_QUEUE
 
+    _install_record_factory()
     shared_queue: multiprocessing.Queue = multiprocessing.Queue()
     listener_process = multiprocessing.Process(
         target=logging_listener_main,
@@ -306,6 +367,8 @@ def setup_logging(level: str = "INFO"):
 
     单进程模式：没有主进程，退化为进程内 ``QueueListener`` 线程。
     """
+    _install_record_factory()
+
     if _SHARED_QUEUE is not None:
         with _listener_lock:
             _install_shared_queue_handler(getattr(logging, level.upper(), logging.INFO))

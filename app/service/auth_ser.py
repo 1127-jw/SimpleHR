@@ -63,11 +63,11 @@ async def get_list_users(
         user: UserModel,
         page: int = 1,
         size: int = 10,
-) -> Sequence[UserModel]|None:
+) -> tuple[list[UserModel], int]:
+    """返回 (当前页用户, 总数)。"""
     async with session.begin():
         user_repo = UserRepo(session)
-        user_list = await user_repo.get_user_list(page, size, user.department_id)
-        return user_list
+        return await user_repo.get_user_list(page, size, user.department_id)
 
 async def update_user_status(
         session: Annotated[AsyncSession, Depends(get_db)],

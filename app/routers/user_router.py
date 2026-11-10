@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks, Query
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi import Request
@@ -10,6 +10,8 @@ from redis.asyncio import Redis
 
 from app.core.db import get_db
 from app.core.redis_client import get_redis
+from app.core import rate_limit
+from app.core.audit import audit
 from app.schemas.user_schema import UserLoginReqSH, UserLoginResSH, RefreshRequest, LogoutRequest, UserInviteSchema, \
     UserRegisterReqSchema, UserRegisterResSchema, UserListResponseSchema, UserStatusUpdateSchema, \
     DepartmentListRespSchema, DingdingUserRespSchema, AssignDepartmentSchema, HrListRespSchema
@@ -31,12 +33,30 @@ router = APIRouter(prefix="/user", tags=["user"])
 
 @router.post("/token",summary="登录",response_model=UserLoginResSH)
 async def login(
+    request: Request,
     login_data:UserLoginReqSH,
     session:Annotated[AsyncSession, Depends(get_db)],
     r: Redis = Depends(get_redis),
 ):
-    user = await auth_ser.authenticate_user(login_data.email,login_data.password,session)
+    """登录。同一 IP + 账号每分钟最多 5 次尝试（滑动窗口）。"""
+    client_ip = request.client.host if request.client else "unknown"
+
+    await rate_limit.enforce(
+        r,
+        f"rl:login:{client_ip}:{login_data.email}",
+        limit=5,
+        window=60,
+        detail="登录尝试过于频繁，请 1 分钟后再试",
+    )
+
+    try:
+        user = await auth_ser.authenticate_user(login_data.email,login_data.password,session)
+    except HTTPException:
+        audit("login.failed", email=login_data.email, ip=client_ip)
+        raise
+
     tokens = await create_tokens(login_data.email,r)
+    audit("login.success", user_id=user.id, email=login_data.email, ip=client_ip)
 
     return {
         "access_token": tokens["access_token"],
@@ -56,10 +76,12 @@ async def refresh(
 
 @router.post("/logout")
 async def logout(
+        request: Request,
         body: LogoutRequest,
         r: Redis = Depends(get_redis),
 ):
     await revoke_refresh_token(body.refresh_token, r)
+    audit("logout", ip=request.client.host if request.client else "unknown")
     return {"detail": "Logged out"}
 
 
@@ -96,14 +118,14 @@ async def register(
 @router.get("/list",summary="获取员工列表",response_model=UserListResponseSchema)
 async def list_users(
         session: Annotated[AsyncSession, Depends(get_db)],
-        page: int = 1,
-        size: int = 10,
+        page: int = Query(1, ge=1, description="页码，从 1 开始"),
+        size: int = Query(10, ge=1, le=100, description="每页数量，1-100"),
         user: UserModel = Depends(get_current_user),
 ):
-    user_list =await auth_ser.get_list_users(session,user,page,size)
+    users, total = await auth_ser.get_list_users(session, user, page, size)
     return {
-        "total": len(user_list),
-        "items": user_list[(page - 1) * size : page * size],
+        "total": total,
+        "items": users,
     }
 
 @router.patch("/status/update",summary="修改员工状态", response_model=ResponseSchema)

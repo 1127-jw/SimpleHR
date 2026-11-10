@@ -13,10 +13,10 @@ if sys.platform == "win32":
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from app.core.config import get_settings
 from app.core.exceptions import AppException, BusinessException, ExternalServiceError
+from app.core.request_context import new_request_id, set_request_id
 
 from app.routers.user_router import router as user_router
 from app.routers.position_router import router as position_router
@@ -24,6 +24,7 @@ from app.routers.candidate_router import router as candidate_router
 
 from contextlib import asynccontextmanager
 from app.core.redis_client import init_redis, close_redis
+from app.core.http_client import close_http_client
 
 settings = get_settings()
 
@@ -45,6 +46,7 @@ async def lifespan(app: FastAPI):
 
     await MailManager.close()
     await close_redis()
+    await close_http_client()
     stop_logging()
 
 
@@ -105,8 +107,19 @@ app.include_router(user_router)
 app.include_router(position_router)
 app.include_router(candidate_router)
 
-# 挂载静态文件服务，用于访问上传的简历
-app.mount("/media", StaticFiles(directory=settings.RESUME_DIR), name="media")
+
+# ==================== 请求 ID ====================
+# 放在最外层（后注册的 middleware 更靠外），保证后续所有 handler / 日志
+# 都能读到 request_id。
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """为每个请求分配 / 透传 request id，并写回响应头。"""
+    request_id = request.headers.get("X-Request-ID") or new_request_id()
+    set_request_id(request_id)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
 
 @app.get("/")
 async def root():

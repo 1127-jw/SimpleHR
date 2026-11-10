@@ -51,7 +51,7 @@
 │   bootstrap_logging()                                                    │
 │     ├─ multiprocessing.Queue  ← 日志记录的跨进程通道（唯一通道）          │
 │     └─ 日志监听进程（simplejob-logger, daemon）                           │
-│            └─ 全局唯一写盘者：4 个 handler（stdout + 3 个文件）           │
+│            └─ 全局唯一写盘者：5 个 handler（stdout + 4 个文件）           │
 │                                                                          │
 │   fork ─────────────────────────────┬──────────────┬──────────────┐      │
 │                                     ↓              ↓              ↓      │
@@ -192,10 +192,11 @@ spawn 启动的 worker 是全新的 Python 解释器，**无法继承**主进程
 `_LoggerNameFilter`（[logging_config.py:77](app/core/logging_config.py#L77)）
 按 `record.name` 前缀过滤，保持原有路由：
 
-| record.name | stdout | workflow.log | error.log | nodes.log |
-|---|:---:|:---:|:---:|:---:|
-| `workflow.nodes` | ✗ | ✗ | ✗ | ✓ |
-| 其他 | ✓ | ✓ | ✓（仅 ERROR+） | ✗ |
+| record.name | stdout | workflow.log | error.log | nodes.log | audit.log |
+|---|:---:|:---:|:---:|:---:|:---:|
+| `workflow.nodes` | ✗ | ✗ | ✗ | ✓ | ✗ |
+| `audit` | ✗ | ✗ | ✗ | ✗ | ✓ |
+| 其他 | ✓ | ✓ | ✓（仅 ERROR+） | ✗ | ✗ |
 
 worker 侧 `workflow.nodes` 设为 `propagate=False` 并单独挂 `QueueHandler`，
 避免记录被 root 重复入队。

@@ -1,9 +1,13 @@
 import os
 
 from datetime import datetime, timedelta
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks, Query, HTTPException
+from fastapi.responses import FileResponse
 from typing import Annotated, List
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.audit import audit
 from app.core.db import get_db
 from app.core.auth import get_current_user
 from app.core.config import get_settings
@@ -19,13 +23,13 @@ from app.service.candidate_ser import resume_upload_service, parse_resume_servic
 from redis.asyncio import Redis
 from app.core.redis_client import get_redis
 from app.schemas.response_schema import ResponseSchema
-from app.repository.resume_repo import CandidateRepo, CandidateAIScoreRepo
+from app.repository.resume_repo import CandidateRepo, CandidateAIScoreRepo, ResumeRepo
 from app.tasks.agent_tasks import run_candidate_agent
 from app.models.candidate import CandidateStatusEnum
 from app.models import InterviewModel
 from app.models.InterviewModel import InterviewResultEnum
 from app.repository.Interview_repo import InterviewRepo
-from utils.ORC_ser import PaddleOcr
+from utils.ocr_service import PaddleOcr
 settings = get_settings()
 
 
@@ -93,22 +97,87 @@ async def create_candidate(
 @router.get("/list", summary="获取候选人列表", response_model=CandidateListSchema)
 async def get_candidate_list(
     session:Annotated[AsyncSession, Depends(get_db)],
-    page: int = Query(1, description="页码"),
-    size: int = Query(10, description="每页的数量"),
+    page: int = Query(1, ge=1, description="页码，从 1 开始"),
+    size: int = Query(10, ge=1, le=100, description="每页数量，1-100"),
     position_id: str|None = Query(None, description="职位的ID"),
     status: CandidateStatusEnum|None = Query(None, description="候选人状态"),
     current_user: UserModel = Depends(get_current_user),
 ):
     async with session.begin():
         candidate_repo = CandidateRepo(session=session)
-        candidates = await candidate_repo.get_list(
+        candidates, total = await candidate_repo.get_list(
             current_user=current_user,
             position_id=position_id,
             status=status,
             page=page,
             size=size,
         )
-        return {"candidates": candidates}
+        return {"candidates": candidates, "total": total}
+
+
+def _resolve_resume_path(file_name: str) -> Path:
+    """把库里存的相对文件名解析为绝对路径，并阻断路径穿越。"""
+    base = Path(settings.RESUME_DIR).resolve()
+    path = (base / file_name).resolve()
+    if base not in path.parents:
+        raise HTTPException(status_code=400, detail="非法的简历路径")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="简历文件不存在")
+    return path
+
+
+@router.get("/{candidate_id}/resume", summary="下载候选人简历")
+async def download_candidate_resume(
+    candidate_id: str,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    current_user: UserModel = Depends(get_current_user),
+):
+    """需要登录，并且只能下载自己有权访问的候选人的简历。
+
+    简历属于敏感个人信息，取代了原先无鉴权的 ``/media`` 静态挂载。
+    """
+    async with session.begin():
+        candidate = await CandidateRepo(session).get_for_user(candidate_id, current_user)
+        if candidate is None:
+            # 「不存在」与「无权访问」返回同一状态，避免被用来枚举候选人 id
+            raise HTTPException(status_code=404, detail="候选人不存在或无权访问")
+        if candidate.resume is None:
+            raise HTTPException(status_code=404, detail="该候选人没有简历")
+        file_name = candidate.resume.file_path
+
+    path = _resolve_resume_path(file_name)
+    audit(
+        "resume.download",
+        user_id=current_user.id,
+        target=f"candidate:{candidate_id}",
+        detail=file_name,
+    )
+    return FileResponse(path, media_type="application/pdf", filename=file_name)
+
+
+@router.get("/resume/{resume_id}", summary="下载简历文件（上传后预览）")
+async def download_resume_file(
+    resume_id: str,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    current_user: UserModel = Depends(get_current_user),
+):
+    """预览场景：简历刚上传、还没关联候选人，只允许上传者本人下载。"""
+    async with session.begin():
+        resume = await ResumeRepo(session).get_by_id_or_none(resume_id)
+        if resume is None:
+            raise HTTPException(status_code=404, detail="简历不存在")
+        if resume.uploader_id != current_user.id and not current_user.is_superuser:
+            raise HTTPException(status_code=403, detail="无权访问该简历")
+        file_name = resume.file_path
+
+    path = _resolve_resume_path(file_name)
+    audit(
+        "resume.preview",
+        user_id=current_user.id,
+        target=f"resume:{resume_id}",
+        detail=file_name,
+    )
+    return FileResponse(path, media_type="application/pdf", filename=file_name)
 
 @router.patch("/{candidate_id}/status", summary="更新候选人状态", response_model=ResponseSchema)
 async def update_candidate_status(
@@ -221,27 +290,3 @@ async def get_7d_candidate(
                 "count": day_counts.get(day_x, 0),
             })
         return result
-
-
-
-# @router.get("/agent/test")
-# async def agent_test(
-#         session:Annotated[AsyncSession, Depends(get_db)],
-#         background_tasks: BackgroundTasks,
-# ):
-#     async with session.begin():
-#         candidate_repo = CandidateRepo(session)
-#         position_repo = PositionRepo(session)
-#         user_repo = UserRepo(session)
-#         #获取ORM模型对象
-#         candidate_model = await candidate_repo.get_by_id("fhzsuTctybq4Env92YuR9b")
-#         position_model =  await position_repo.get_by_id("RBk6bC648aS7EmK6gcARbD")
-#         interviewer_model = await user_repo.get_by_id("9iqEJnR8iZwJSHLxoHcQke")
-#         #把ORM模型对象转成schema对象
-#         candidate = CandidateSchema.model_validate(candidate_model)
-#         position = PositionSchema.model_validate(position_model)
-#         interviewer = UserSH.model_validate(interviewer_model)
-#
-#         background_tasks.add_task(run_candidate_agent, candidate, position, interviewer)
-#
-#         return {"result": "success"}

@@ -22,7 +22,7 @@
 """
 import os
 from pathlib import Path
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -140,6 +140,26 @@ class Settings(BaseSettings):
     @property
     def REDIS_URL(self) -> str:
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+
+    @model_validator(mode="after")
+    def _validate_secrets(self) -> "Settings":
+        """启动即校验密钥，避免「跑起来才在登录处 500」。
+
+        空密钥会让 PyJWT 抛 InvalidKeyError；生产环境（非 debug）还要求
+        长度 >= 32，防止用弱密钥给 JWT 签名。
+        """
+        for name in ("ACCESS_SECRET", "REFRESH_SECRET"):
+            value: str = getattr(self, name)
+            if not value:
+                raise ValueError(
+                    f"{name} 未配置：请在 .env 或环境变量中设置"
+                    "（生成方式：openssl rand -hex 32）"
+                )
+            if not self.debug and len(value) < 32:
+                raise ValueError(
+                    f"{name} 太短（{len(value)} 字符），非 debug 环境要求至少 32 字符"
+                )
+        return self
 
 
 

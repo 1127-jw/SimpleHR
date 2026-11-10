@@ -16,6 +16,12 @@ DEFAULT_SCORE_PASS_THRESHOLD: int = settings.SCORE_PASS_THRESHOLD
 DEFAULT_MAX_NEGOTIATION_ROUNDS: int = settings.MAX_NEGOTIATION_ROUNDS
 EMAIL_REPLY_TIMEOUT: str = settings.EMAIL_REPLY_TIMEOUT
 
+# === 候选人邮件回复的语义标记 ===
+# 由 check_availability 节点写入，由 candidate_graph 的路由函数读取。
+# 两端共用同一份常量，避免改一处漏一处。
+REPLY_REFUSED: str = "CANDIDATE_REFUSED"
+REPLY_TIME_AVAILABLE: str = "SYSTEM_TIME_AVAILABLE"
+
 assign_state_property = lambda x, y: y if y is not None else x
 
 

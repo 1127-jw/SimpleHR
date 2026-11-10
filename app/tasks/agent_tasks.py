@@ -34,7 +34,7 @@ async def _mark_processing_error(candidate_id: str, error_msg: str) -> None:
                     candidate_id=candidate_id,
                     error_message=error_msg,
                 )
-        logger.info(f"候选人 {candidate_id} 已标记为处理异常")
+        logger.info("候选人 %s 已标记为处理异常", candidate_id)
     except Exception as e:
         logger.critical(
             f"标记候选人 {candidate_id} 处理异常状态失败: {e}",

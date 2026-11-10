@@ -29,7 +29,7 @@
     try:
         ...
     except LLMServiceError as e:
-        logger.error(f"LLM 调用失败: {e}")
+        logger.error("LLM 调用失败: %s", e)
         raise
 """
 

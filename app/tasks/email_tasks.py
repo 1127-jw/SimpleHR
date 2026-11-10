@@ -13,7 +13,7 @@ async def send_email_task(message: MessageSchema):
     try:
         await mail.send_message(message)
     except SMTPResponseException as e:
-        logger.error(f"邮件发送失败！{e}")
+        logger.error("邮件发送失败！%s", e)
 
 async def send_invite_email_task(
     email: str,

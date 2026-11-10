@@ -1,17 +1,15 @@
 import logging
-from app.core.config import get_settings
+
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain_core.prompts import ChatPromptTemplate
-
-settings = get_settings()
-logger = logging.getLogger(settings.NODE_LOGGER_NAME)
 
 from app.agents.llms import deepseek_llm, qwen_llm
 from app.agents.prompts import (
     SCORE_FOR_CANDIDATE_SYSTEM_PROMPT,
     SCORE_FOR_CANDIDATE_USER_PROMPT,
 )
+from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
 from app.core.exceptions import LLMServiceError
 from app.models.candidate import CandidateStatusEnum
@@ -20,13 +18,23 @@ from app.schemas.agent_schema import AgentCandidateScoreSchema
 from app.workflow.candidate_state import CandidateRecruitmentState
 from app.workflow.error_handler import node_error_wrapper
 
-# 模块级单例：避免每次调用 scoring_node 都重建 Agent（与 check_availability_node 的 _proposed_time_agent 一致）
-_score_agent = create_agent(
-    model=deepseek_llm,
-    system_prompt=SCORE_FOR_CANDIDATE_SYSTEM_PROMPT,
-    middleware=[ModelFallbackMiddleware(first_model=qwen_llm)],
-    response_format=AgentCandidateScoreSchema,
-)
+settings = get_settings()
+logger = logging.getLogger(settings.NODE_LOGGER_NAME)
+
+# 模块级缓存：首次用到时才构造 Agent，避免 import 期副作用
+_score_agent = None
+
+
+def _get_score_agent():
+    global _score_agent
+    if _score_agent is None:
+        _score_agent = create_agent(
+            model=deepseek_llm,
+            system_prompt=SCORE_FOR_CANDIDATE_SYSTEM_PROMPT,
+            middleware=[ModelFallbackMiddleware(first_model=qwen_llm)],
+            response_format=AgentCandidateScoreSchema,
+        )
+    return _score_agent
 
 _score_user_prompt_template = ChatPromptTemplate.from_messages([
     ("user", SCORE_FOR_CANDIDATE_USER_PROMPT)
@@ -55,7 +63,7 @@ async def scoring_node(state: CandidateRecruitmentState) -> dict:
     })
 
     try:
-        response = await _score_agent.ainvoke({
+        response = await _get_score_agent().ainvoke({
             "messages": messages.to_messages(),
         })
     except Exception as e:

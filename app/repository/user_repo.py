@@ -1,5 +1,5 @@
 from . import BaseRepo
-from sqlalchemy import select, exists
+from sqlalchemy import select, func
 from typing import List, Sequence
 from sqlalchemy.orm import selectinload
 from app.models.user import UserModel, DepartmentModel, DingdingUserModel
@@ -20,19 +20,29 @@ class UserRepo(BaseRepo):
         user = await self.session.scalar(stmt)
         return user
 
+    async def get_by_username(self, username: str) -> UserModel | None:
+        stmt = select(UserModel).where(UserModel.username == username)
+        user = await self.session.scalar(stmt)
+        return user
+
     async def get_user_list(
             self,
             page: int = 1,
             size: int = 10,
             department_id: str | None = None,
-    ) -> Sequence[UserModel] | None:
+    ) -> tuple[list[UserModel], int]:
+        """返回 (当前页数据, 符合条件的总数)。"""
         stmt = select(UserModel)
         if department_id:
             stmt = stmt.where(UserModel.department_id == department_id)
+
+        total = await self.session.scalar(
+            select(func.count()).select_from(stmt.subquery())
+        ) or 0
+
         offset = (page - 1) * size
-        stmt = stmt.offset(offset).limit(size)
-        users = await self.session.scalars(stmt)
-        return users.all()
+        users = await self.session.scalars(stmt.offset(offset).limit(size))
+        return list(users.all()), total
 
     async def set_dingding_user(self, user_id: str, dingding_user_data: dict) -> DingdingUserModel:
         stmt = select(UserModel).where(UserModel.id == user_id).options(selectinload(UserModel.dingding_user))

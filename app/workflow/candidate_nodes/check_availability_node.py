@@ -1,10 +1,13 @@
+import logging
+from datetime import datetime, timedelta, time
+
+from langchain.agents import create_agent
 from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain_core.tools import tool
 from langgraph.types import interrupt
-from langchain.agents import create_agent
-import logging
+from pydantic import BaseModel, Field
 
-
+from app.agents.llms import deepseek_llm, qwen_llm
 from app.agents.prompts import PROPOSED_TIME_SYSTEM_PROMPT
 from app.core.config import get_settings
 from app.core.exceptions import (
@@ -12,14 +15,13 @@ from app.core.exceptions import (
     EmailSendError,
     NegotiationError,
 )
-from app.workflow.candidate_state import CandidateRecruitmentState
-from app.workflow.error_handler import node_error_wrapper
 from app.service.dingtalk_ser import get_user_available_slots
-from datetime import datetime, timedelta, time
-
-from app.agents.llms import deepseek_llm, qwen_llm
-from pydantic import BaseModel, Field
-
+from app.workflow.candidate_state import (
+    CandidateRecruitmentState,
+    REPLY_REFUSED,
+    REPLY_TIME_AVAILABLE,
+)
+from app.workflow.error_handler import node_error_wrapper
 from utils.time_ISO8601_datatime import BEIJING_TZ, now_beijing
 
 settings = get_settings()
@@ -68,14 +70,22 @@ def get_current_time() -> str:
     )
 
 
-# ==================== 模块级单例，避免每次调用创建 Agent ====================
-_proposed_time_agent = create_agent(
-    model=deepseek_llm,
-    system_prompt=PROPOSED_TIME_SYSTEM_PROMPT,
-    middleware=[ModelFallbackMiddleware(first_model=qwen_llm)],
-    tools=[get_current_time],
-    response_format=ProposedTime,
-)
+# ==================== 模块级缓存，首次用到时才创建 Agent ====================
+_proposed_time_agent = None
+
+
+def _get_proposed_time_agent():
+    """懒加载：避免 import 期构造 Agent（导入副作用）。"""
+    global _proposed_time_agent
+    if _proposed_time_agent is None:
+        _proposed_time_agent = create_agent(
+            model=deepseek_llm,
+            system_prompt=PROPOSED_TIME_SYSTEM_PROMPT,
+            middleware=[ModelFallbackMiddleware(first_model=qwen_llm)],
+            tools=[get_current_time],
+            response_format=ProposedTime,
+        )
+    return _proposed_time_agent
 
 
 # ==================== 检查函数 ====================
@@ -142,7 +152,7 @@ def get_candidate_email_reply_node(state: CandidateRecruitmentState) -> dict:
 async def _extract_time_from_reply(text: str) -> ProposedTime:
     """从候选人邮件回复中提取候选人是否同意上次邀约的时间，若不同意则提取提议的面试时间"""
     try:
-        result = await _proposed_time_agent.ainvoke(
+        result = await _get_proposed_time_agent().ainvoke(
             {"messages": [{"role": "user", "content": text}]}
         )
         response = result["structured_response"]
@@ -243,7 +253,7 @@ async def check_availability_node(state: CandidateRecruitmentState) -> dict:
     if pt.refused:
         logger.info("[check_avail] candidate refused | candidate_id=%s", cid)
         return {
-            "candidate_email_reply": "CANDIDATE_REFUSED",
+            "candidate_email_reply": REPLY_REFUSED,
             "proposed_interview_time": state["proposed_interview_time"],
             "current_stage": "refused",
         }
@@ -252,7 +262,7 @@ async def check_availability_node(state: CandidateRecruitmentState) -> dict:
     if pt.confirm:
         logger.info("[check_avail] candidate confirmed | candidate_id=%s", cid)
         return {
-            "candidate_email_reply": "SYSTEM_TIME_AVAILABLE",
+            "candidate_email_reply": REPLY_TIME_AVAILABLE,
             "proposed_interview_time": state["proposed_interview_time"],
             "current_stage": "confirmed",
         }

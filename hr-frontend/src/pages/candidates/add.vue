@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="mb-4">
     <div class="mb-3">
       <el-button link class="back-link" @click="goBackToCandidates">
@@ -85,18 +85,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, type UploadRequestOptions } from 'element-plus'
 import { ArrowLeft, UploadFilled } from '@element-plus/icons-vue'
 import fullLoading from '@/utils/fullLoading'
-import http from '@/apis/requests'
 
 import {
   createCandidate,
   uploadResume,
   parseResume,
   getResumeParseTaskStatus,
+  downloadResumeFile,
   type CandidateCreateData,
   type ResumeOCRResult,
 } from '@/apis/candidate_api'
@@ -134,6 +134,26 @@ const router = useRouter()
 const goBackToCandidates = (): void => {
   router.push({ name: 'candidates' })
 }
+
+// 简历预览：走鉴权接口取 Blob，再用临时 URL 交给 <embed>
+// （<embed> 无法携带 Authorization 头，所以不能直连受保护接口）
+let previewObjectUrl: string | null = null
+
+const loadResumePreview = async (id: string): Promise<void> => {
+  const blob = await downloadResumeFile(id)
+  if (previewObjectUrl) {
+    URL.revokeObjectURL(previewObjectUrl)
+  }
+  previewObjectUrl = URL.createObjectURL(blob)
+  resumeUrl.value = previewObjectUrl
+}
+
+onUnmounted(() => {
+  if (previewObjectUrl) {
+    URL.revokeObjectURL(previewObjectUrl)
+    previewObjectUrl = null
+  }
+})
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -179,7 +199,7 @@ const handleUploadResume = async (options: UploadRequestOptions): Promise<void> 
     }
 
     resumeId.value = uploadResp.resume.id
-    resumeUrl.value = `${http.baseURL}/media/${uploadResp.resume.file_path}`
+    await loadResumePreview(resumeId.value)
 
     fullLoading.updateText('简历解析任务创建中...')
     const parseResp = await parseResume(resumeId.value)

@@ -82,6 +82,7 @@ export interface Candidate {
 
 export interface CandidateListResponse {
   candidates: Candidate[]
+  total: number
 }
 
 export interface CandidateCreateData {
@@ -152,8 +153,19 @@ export const createCandidate = (data: CandidateCreateData) => {
 }
 
 export const getCandidates = (params: GetCandidatesParams) => {
-  return httpRequest.get<CandidateListResponse>('/candidate/list', { params })
+  return httpRequest.get<CandidateListResponse>('/candidate/list', params)
 }
+
+/**
+ * 下载某候选人的简历（需登录，后端做权限校验）。
+ * 简历属于敏感个人信息，不再通过公开的 /media 静态路径访问。
+ */
+export const downloadCandidateResume = (candidateId: string): Promise<Blob> =>
+  httpRequest.get<Blob>(`/candidate/${candidateId}/resume`, undefined, { responseType: 'blob' })
+
+/** 下载刚上传、尚未关联候选人的简历（仅上传者本人）。 */
+export const downloadResumeFile = (resumeId: string): Promise<Blob> =>
+  httpRequest.get<Blob>(`/candidate/resume/${resumeId}`, undefined, { responseType: 'blob' })
 
 export const updateCandidateStatus = (candidateId: string, data: CandidateStatusUpdateData) => {
   return httpRequest.patch(`/candidate/${candidateId}/status`, data)

@@ -1,6 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from app.schemas.user_schema import UserSH
-# from core.cache import TaskInfoSchema
 from app.models.candidate import GenderEnum, CandidateStatusEnum
 from app.schemas.position_schema import PositionSchema
 from typing import Optional, Literal
@@ -22,9 +21,6 @@ class ResumePaseSchema(BaseModel):
 
 class ResumeParseTaskRespSchema(BaseModel):
     task_id: str = Field(..., description="任务ID")
-
-# class ResumeParseTaskInfoRespSchema(TaskInfoSchema):
-#     pass
 
 class CandidateCreateSchema(BaseModel):
     name: str = Field(..., description="候选人姓名")
@@ -80,6 +76,7 @@ class CandidateStatusUpdateSchema(BaseModel):
 
 class CandidateListSchema(BaseModel):
     candidates: list[CandidateSchema]
+    total: int = Field(..., description="符合筛选条件的候选人总数（用于分页）")
 
 class CandidateAIScoreSchema(BaseModel):
     id: str

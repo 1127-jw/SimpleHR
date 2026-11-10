@@ -13,9 +13,6 @@ from app.service import position_ser
 # core
 from app.core.db import get_db
 from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user, get_super_user
-from app.core.config import get_settings
-
-settings = get_settings()
 
 router = APIRouter(prefix="/position", tags=["position"])
 

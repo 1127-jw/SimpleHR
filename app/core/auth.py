@@ -1,4 +1,3 @@
-import os
 from redis.asyncio import Redis
 import jwt
 import uuid
@@ -25,13 +24,8 @@ ACCESS_SECRET = settings.ACCESS_SECRET
 REFRESH_SECRET = settings.REFRESH_SECRET
 ALGORITHM = "HS256"
 
-ACCESS_EXPIRE_MINUTES = 30
-REFRESH_EXPIRE_DAYS = 7
-
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = os.getenv("REDIS_PORT", "6379")
-REDIS_DB = os.getenv("REDIS_DB", "0")
-
+ACCESS_EXPIRE_MINUTES = settings.ACCESS_EXPIRE_MINUTES
+REFRESH_EXPIRE_DAYS = settings.REFRESH_EXPIRE_DAYS
 
 
 # Token 载荷模型

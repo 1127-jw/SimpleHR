@@ -55,7 +55,7 @@ async def resume_upload_service(
                 content = await file.read(1024)
 
     except OSError as e:
-        logger.error(f"文件写入失败: {e}")
+        logger.error("文件写入失败: %s", e)
         raise ResumeProcessingError(f"简历文件写入失败: {e}") from e
 
 
@@ -70,7 +70,7 @@ async def resume_upload_service(
             await converter.convert()
             file_path = pdf_path
         except Exception as e:
-            logger.error(f"Word 转 PDF 失败: {e}")
+            logger.error("Word 转 PDF 失败: %s", e)
             raise ResumeProcessingError(f"Word 转 PDF 失败: {e}") from e
 
     # 4. 将简历数据存储到数据库中

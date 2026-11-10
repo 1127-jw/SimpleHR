@@ -4,6 +4,27 @@
 RESUME_PROJECT.md
 CHANGES.md
 
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 测试临时目录
+tests/.tmp/
+pytest-cache-files-*
+
+# uv（本地缓存 / 自带的 Python 运行时）
+.uv-cache/
+.uv-python/
+
+# 运行时数据（目录由部署脚本创建，不进版本库）
+upload/
+attachments/
+mailbot_state.json
+
 # Logs
 logs
 *.log

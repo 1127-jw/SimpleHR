@@ -49,12 +49,7 @@
             <span class="ml-1"></span>
             <el-button link type="primary" @click="openStatusDialog(scope.row)">修改状态</el-button>
             <span class="ml-1"></span>
-            <el-link
-              type="primary"
-              :href="http.baseURL + '/media/' + scope.row.resume.file_path"
-              target="_blank"
-              >简历</el-link
-            >
+            <el-button link type="primary" @click="openResume(scope.row)">简历</el-button>
             <span class="ml-1"></span>
             <el-button link type="primary" @click="showAIScore(scope.row)">AI评分</el-button>
           </template>
@@ -206,10 +201,14 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getCandidates, getCandidateAiScore, updateCandidateStatus } from '@/apis/candidate_api'
+import {
+  getCandidates,
+  getCandidateAiScore,
+  updateCandidateStatus,
+  downloadCandidateResume,
+} from '@/apis/candidate_api'
 import type { Candidate, CandidateAIScore } from '@/apis/candidate_api'
 import { CandidateStatusEnum } from '@/apis/candidate_api'
-import http from '@/apis/requests'
 import { getPositionList, type Position } from '@/apis/position_api'
 
 const candidates = ref<Candidate[]>([])
@@ -221,6 +220,18 @@ const selectedCandidate = ref<Candidate | null>(null)
 const showDetails = (candidate: Candidate) => {
   selectedCandidate.value = candidate
   detailsDialogVisible.value = true
+}
+
+// 下载简历：走鉴权接口拿 Blob，再用临时 URL 打开
+const openResume = async (candidate: Candidate) => {
+  try {
+    const blob = await downloadCandidateResume(candidate.id)
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank')
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch {
+    ElMessage.error('简历下载失败，或您无权访问该候选人的简历')
+  }
 }
 
 // 修改状态

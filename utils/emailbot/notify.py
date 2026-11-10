@@ -35,47 +35,17 @@ async def _find_candidate_by_email(email_address: str):
 
 
 async def notify(email: ParsedEmail, rule) -> None:
-    """
-        files = "、".join(a.filename for a in email.attachments) or "（无附件）"
-    logger.info(
-        "[命中规则] %s | 来自 %s | 主题: %s | 附件: %s",
-        rule.name, email.from_.address, email.subject, files,
-    )
-    # ---- 基本信息 ----
-    print(f"UID:        {email.uid}")
-    print(f"Message-ID: {email.message_id}")
-    print(f"主题:       {email.subject}")
-    print(f"日期:       {email.date}")
+    """邮件命中规则后的回调：驱动招聘流程继续执行。
 
-    # ---- 发件人 ----
-    print(f"发件人姓名: {email.from_.name}")
-    print(f"发件人地址: {email.from_.address}")
-    print(f"发件地址(小写): {email.sender}")
+    Args:
+        email: 已解析的邮件。
+        rule: 命中的规则（``MailRule``）。
 
-    # ---- 收件人 ----
-    for addr in email.to:
-        print(f"收件人: {addr.name} <{addr.address}>")
+    当前只处理「询问面试时间或进度」：
 
-    for addr in email.cc:
-        print(f"抄送:   {addr.name} <{addr.address}>")
-
-    # ---- 正文 ----
-    print(f"纯文本: {email.text[:200]}")   # 前 200 字
-    print(f"HTML:   {email.html[:200]}")   # 原始 HTML
-
-    # ---- 附件 ----
-    for att in email.attachments:
-        print(f"附件名:   {att.filename}")
-        print(f"类型:     {att.content_type}")
-        print(f"大小:     {att.size} bytes")
-        print(f"落盘路径: {att.saved_path}")
-
-    # ---- 原始 MIME 头（任意头都可取）----
-    raw = email.raw
-    print(f"Reply-To:     {raw.get('Reply-To')}")
-    print(f"References:   {raw.get('References')}")
-    print(f"Content-Type: {raw.get_content_type()}")
-
+    - ``GRAPH_OPEN=False``：走旧 Agent 模式（``CandidateProcessAgent``）
+    - ``GRAPH_OPEN=True``：走 LangGraph 状态图，用 ``Command(resume=...)``
+      恢复 ``get_candidate_email_reply`` 处中断的流程
     """
     graph = settings.GRAPH_OPEN
     if rule.name == "简历投递":
@@ -89,9 +59,6 @@ async def notify(email: ParsedEmail, rule) -> None:
         if not candidate_schema:
             logger.warning("未找到对应的候选人: %s", email.from_.address)
             return
-        # if candidate_schema.status != CandidateStatusEnum.AI_FILTER_PASSED:
-        #     logger.warning("候选人未通过ai筛选")
-        #     return
         if not graph:
             async with CandidateProcessAgent(
                 candidate=candidate_schema,

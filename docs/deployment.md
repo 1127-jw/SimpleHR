@@ -30,7 +30,7 @@
 flowchart LR
     U[HR / 候选人] -->|HTTPS| LB[Nginx / Caddy]
     LB -->|静态资源| FE[前端 Vue dist]
-    LB -->|/user /position /candidate /media| BE[FastAPI 后端 :8000]
+    LB -->|/user /position /candidate| BE[FastAPI 后端 :8000]
     BE --> PG[(PostgreSQL :5432)]
     BE --> RD[(Redis :6379)]
     BE <-->|IMAP 993 / SMTP 465| MAIL[邮件服务器]
@@ -318,8 +318,8 @@ npm run build
 
 构建完成后 `hr-frontend/dist/` 即为前端全部静态文件。
 
-> **为什么设为空字符串**：`src/apis/requests.ts` 中 axios 的 `baseURL` 与该值直接拼接（如 `http.baseURL + '/media/...'`）。留空后所有请求走相对路径，由 Nginx 同源反代，避免跨域与地址硬编码。
-> 若前后端不同域名，则填 `https://hr.example.com`，并确保该域名的 `/user`、`/position`、`/candidate`、`/media` 路径反代到后端。
+> **为什么设为空字符串**：`src/apis/requests.ts` 中 axios 的 `baseURL` 与该值直接拼接（如 `http.baseURL + '/candidate/...'`）。留空后所有请求走相对路径，由 Nginx 同源反代，避免跨域与地址硬编码。
+> 若前后端不同域名，则填 `https://hr.example.com`，并确保该域名的 `/user`、`/position`、`/candidate` 路径反代到后端。
 
 ### 1.9 配置 Nginx
 
@@ -362,14 +362,7 @@ server {
     ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
 
     # ---- 后端 API 反向代理（注意：后端没有 /api 前缀，按路径前缀区分）----
-    # 简历文件 /media/*
-    location /media/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
+    # 简历文件走 GET /candidate/{id}/resume（需登录），不再有 /media 静态路径
 
     # 用户 / 认证
     location /user/ {
@@ -798,14 +791,6 @@ server {
     client_max_body_size 50m;
 
     # ---- 后端 API 反代 ----
-    location /media/ {
-        proxy_pass http://app:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
     location /user/ {
         proxy_pass http://app:8000;
         proxy_set_header Host $host;
@@ -1307,7 +1292,7 @@ ps -ef | grep simplejob-logger
 | `uv sync` / 镜像构建失败：找不到 pywin32 Linux wheel | 平台标记异常 | 确认 `pyproject.toml` 中为 `pywin32>=312; sys_platform == 'win32'` |
 | 后端启动即退出，日志含 `mailbot` / IMAP 错误 | 邮箱授权码错误 / 端口不通 | 检查 `MAIL_PASSWORD`（授权码）、`IMAP_HOST`、出站 993 端口 |
 | 登录接口 401 | 账号密码错误或 Token 过期 | 用初始账号验证；确认 `ACCESS_SECRET` 未在重建后变化（变化会导致已签发 Token 全部失效） |
-| 前端页面能开但接口 404 | Nginx 未反代 API 前缀 | 检查 `location /user/`、`/position/`、`/candidate/`、`/media/` 配置 |
+| 前端页面能开但接口 404 | Nginx 未反代 API 前缀 | 检查 `location /user/`、`/position/`、`/candidate/` 配置 |
 | 前端报跨域错误 | `VITE_API_BASE_URL` 指向了不同域名 | 同源部署（空串）；跨域需确认后端 CORS 配置（`app/main.py` 当前为 `allow_origins=["*"]`，允许） |
 | 上传 Word 简历后解析失败 | 缺 LibreOffice / Office | Linux 装 LibreOffice；Windows 装 Office |
 | 钉钉授权回调失败 | `BACKEND_BASE_URL` 非公网 HTTPS | 改为公网域名；确认 443 可达、证书有效 |

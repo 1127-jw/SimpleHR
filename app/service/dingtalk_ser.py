@@ -7,12 +7,12 @@ from alibabacloud_dingtalk.oauth2_1_0 import models as dingtalkoauth_2__1__0_mod
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote, urljoin
 from redis.asyncio import Redis
-import httpx
 import logging
 from typing import cast, Any
 from app.repository.user_repo import UserRepo
 from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
+from app.core.http_client import get_http_client
 from app.core.redis_client import get_redis
 from app.core.exceptions import DingTalkServiceError
 from app.models import DingdingUserModel
@@ -81,26 +81,27 @@ async def refresh_user_access_token(
 
     返回 (access_token, refresh_token, expire_in)
     """
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{DINGTALK_BASE}/v1.0/oauth2/userAccessToken",
-            json={
-                "clientId": settings.DINGTALK_CLIENT_ID,
-                "clientSecret": settings.DINGTALK_CLIENT_SECRET,
-                "grantType": "refresh_token",
-                "refreshToken": refresh_token,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        access_token = data["accessToken"]
-        refresh_token = data["refreshToken"]
+    # 复用全局 client（见 app/core/http_client.py）
+    resp = await get_http_client().post(
+        f"{DINGTALK_BASE}/v1.0/oauth2/userAccessToken",
+        json={
+            "clientId": settings.DINGTALK_CLIENT_ID,
+            "clientSecret": settings.DINGTALK_CLIENT_SECRET,
+            "grantType": "refresh_token",
+            "refreshToken": refresh_token,
+        },
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    access_token = data["accessToken"]
+    refresh_token = data["refreshToken"]
 
-        ac_cache_key = f"dingtalk:user_actoken:{state}"
-        re_cache_key = f"dingtalk:user_retoken:{state}"
+    ac_cache_key = f"dingtalk:user_actoken:{state}"
+    re_cache_key = f"dingtalk:user_retoken:{state}"
 
-        await r.set(ac_cache_key, access_token, ex=7200)
-        await r.set(re_cache_key, refresh_token, ex=30 * 24 * 60 * 60)
+    await r.set(ac_cache_key, access_token, ex=7200)
+    await r.set(re_cache_key, refresh_token, ex=30 * 24 * 60 * 60)
+
     return {
         "access_token": access_token,
         "state": state,
@@ -157,7 +158,7 @@ async def get_union_id_and_access_token_by_user_id(interviewer_id: str) -> tuple
         r = await get_redis()
         access_token_info = await get_user_access_token(interviewer_id, r)
     except Exception as e:
-        logger.error(f"获取钉钉 access_token 失败: {e}")
+        logger.error("获取钉钉 access_token 失败: %s", e)
         raise DingTalkServiceError(
             f"获取钉钉 access_token 失败: {e}"
         ) from e
@@ -169,34 +170,33 @@ async def get_union_id_and_access_token_by_user_id(interviewer_id: str) -> tuple
 
 
 async def get_dingtalk_user(session,state,access_token: str, union_id: str="me"):
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{DINGTALK_BASE}/v1.0/contact/users/{union_id}",
-            headers={
-                "x-acs-dingtalk-access-token": access_token,
-            },
+    resp = await get_http_client().get(
+        f"{DINGTALK_BASE}/v1.0/contact/users/{union_id}",
+        headers={
+            "x-acs-dingtalk-access-token": access_token,
+        },
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    nick = payload["nick"]
+    mobile = payload["mobile"]
+    open_id = payload["openId"]
+    union_id = payload["unionId"]
+
+    async with session.begin():
+        # 2.1 get user 检查邮箱是否已经被注册
+        user_repo = UserRepo(session)
+        await user_repo.set_dingding_user(
+            user_id=state,
+            dingding_user_data={
+                "nick": nick,
+                "mobile": mobile,
+                "open_id": open_id,
+                "union_id": union_id,
+            }
         )
-        resp.raise_for_status()
-        resp = resp.json()
-        nick = resp["nick"]
-        mobile = resp["mobile"]
-        open_id = resp["openId"]
-        union_id = resp["unionId"]
 
-        async with session.begin():
-            # 2.1 get user 检查邮箱是否已经被注册
-            user_repo = UserRepo(session)
-            await user_repo.set_dingding_user(
-                user_id=state,
-                dingding_user_data={
-                    "nick": nick,
-                    "mobile": mobile,
-                    "open_id": open_id,
-                    "union_id": union_id,
-                }
-            )
-
-        return f"/user/dingtalk/authorize/success?nick={nick}"
+    return f"/user/dingtalk/authorize/success?nick={nick}"
 
 
 #创建日程日期的查询url
@@ -223,12 +223,10 @@ async def get_calendar_list(
     headers = {
         "x-acs-dingtalk-access-token": access_token
     }
-    async with httpx.AsyncClient() as client:
-        calendar_resp = await client.get(url,headers=headers)
-        calendar_resp.raise_for_status()
-        calendar_data = calendar_resp.json() or {}
-        events = calendar_data.get("events")
-        return events
+    calendar_resp = await get_http_client().get(url, headers=headers)
+    calendar_resp.raise_for_status()
+    calendar_data = calendar_resp.json() or {}
+    return calendar_data.get("events")
 
 
 #创建日程的url
@@ -253,11 +251,9 @@ async def create_calendar(union_id: str, access_token: str, summary: str, start_
             "timeZone": "Asia/Shanghai",
         }
     }
-    async with httpx.AsyncClient() as client:
-        calendar_response = await client.post(url, json=data, headers=headers)
-        calendar_response.raise_for_status()
-        calendar_data = calendar_response.json() or {}
-        return calendar_data
+    calendar_response = await get_http_client().post(url, json=data, headers=headers)
+    calendar_response.raise_for_status()
+    return calendar_response.json() or {}
 
 
 async def get_user_available_slots(
@@ -297,7 +293,7 @@ async def get_user_available_slots(
             max_days_to_search=max_days_to_search,
         )
     except Exception as e:
-        logger.error(f"获取面试官可用时间失败: {e}")
+        logger.error("获取面试官可用时间失败: %s", e)
         raise DingTalkServiceError(
             f"获取面试官可用时间失败: {e}"
         ) from e
