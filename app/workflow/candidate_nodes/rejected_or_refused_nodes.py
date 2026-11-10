@@ -1,11 +1,13 @@
 import logging
 from app.workflow.candidate_state import CandidateRecruitmentState
 from app.workflow.error_handler import node_error_wrapper
+from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
 from app.repository.resume_repo import CandidateRepo
 from app.models.candidate import CandidateStatusEnum
 
-logger = logging.getLogger("workflow.nodes")
+settings = get_settings()
+logger = logging.getLogger(settings.NODE_LOGGER_NAME)
 
 
 @node_error_wrapper

@@ -7,6 +7,8 @@
 > - **方案二（Docker 部署）**：使用 Docker Compose 编排 后端 + 前端 + PostgreSQL + Redis + Caddy（自动 HTTPS），一条命令完成部署。
 >
 > 两套方案共用同一份源码与同一份 `.env` 配置，可随时切换。
+>
+> **多进程部署**（gunicorn）见 [第 3 章](#3-多进程--高并发部署gunicorn)。
 
 ---
 
@@ -15,7 +17,8 @@
 - [0. 部署前必读](#0-部署前必读)
 - [1. 方案一：裸机部署（不使用 Docker）](#1-方案一裸机部署不使用-docker)
 - [2. 方案二：Docker 部署](#2-方案二docker-部署)
-- [3. 附录](#3-附录)
+- [3. 多进程 / 高并发部署（gunicorn）](#3-多进程--高并发部署gunicorn)
+- [4. 附录](#4-附录)
 
 ---
 
@@ -59,42 +62,43 @@ flowchart LR
 
 ### 0.3 六个部署阻塞项（务必先读）
 
-1. **`pywin32` 是 Windows 专属依赖，Linux / Docker 下必须改 `pyproject.toml`**。
-   项目 `pyproject.toml` 中 `pywin32>=312` 没有加平台标记，在 Linux 上 `uv sync` / `pip install` 会直接失败（PyPI 上没有 Linux  wheel）。**这是 Linux 部署的第一道硬性修改**，详见 [0.4](#04-部署前代码修改linuxdocker-必需)。
+1. **`pywin32` 的平台标记已在 `pyproject.toml` 中处理，无需手工改代码。**
+   依赖声明为 `pywin32>=312; sys_platform == 'win32'`，Linux / Docker 下
+   不会尝试安装（PyPI 上没有 Linux wheel）。Windows 开发机保持原样即可，
+   Word → PDF 走 Office COM，需服务器安装 Microsoft Office。
 
 2. **`MAIL_USERNAME` / `MAIL_PASSWORD` / `MAIL_FROM` 是必填项**（`app/core/config.py` 中用 `Field(...)` 声明），缺任意一项服务启动即报 `ValidationError`。163 邮箱的 `MAIL_PASSWORD` 填的是**授权码**，不是登录密码。
 
 3. **前端 API 地址是构建期注入的**。`VITE_API_BASE_URL` 在 `npm run build` 时写死进产物，部署前必须设置。推荐设为**空字符串**（前端与 API 同源，由 Nginx 反代），详见 [1.8](#18-构建前端)。
 
-4. **邮件机器人与多 worker 冲突，生产必须单 worker 运行**。
-   邮件机器人（`MailManager`）在 FastAPI `lifespan` 中初始化（`app/main.py:36`），`uvicorn --workers N` 会 fork 出 N 个进程，每个进程都会启动一套独立的 IMAP 长连接 + APScheduler 调度器，造成重复拉取邮件、UID 游标（`mailbot_state.json`）竞争。**裸机用 systemd 启动、Docker 用容器（天然单进程）都默认是单 worker，无需额外配置；但不要手动加 `--workers`。**
+4. **多 worker 与邮件机器人冲突 —— 这是当前唯一阻止横向扩容的业务约束。**
+   邮件机器人（`MailManager`）在 FastAPI `lifespan` 中初始化（`app/main.py`），
+   多进程会各自启动一套 IMAP 长连接 + APScheduler 调度器，造成重复拉取邮件、
+   UID 游标（`mailbot_state.json`）竞争。
+   **日志已经不再是障碍**（详见 [第 3 章](#3-多进程--高并发部署gunicorn)），
+   但在把邮件机器人拆成独立服务之前，`workers` 保持 `1`。
 
 5. **Redis 不支持密码认证**（`app/core/redis_client.py` 的连接串中没有密码字段）。生产环境请把 Redis 放在内网 / 容器内网，不要暴露公网；如需密码需自行扩展代码。
 
 6. **LLM 与 OCR 的部分参数硬编码在代码中**，换服务商需要改代码：
-   - `app/agents/llms.py:10-28`：`base_url` 硬编码为 `https://maas.qianwenaiapi.com/compatible-mode/v1`，模型名 `deepseek-v4.1-flash` / `qwen3.8-max`，仅 `api_key` 走环境变量 `DASHSCOPE_API_KEY`。
-   - `utils/ORC_ser.py:18`：OCR 调用硬编码为 `https://paddleocr.aistudio-app.com/api/v2/ocr/jobs`，仅 `access_token` 走环境变量 `PADDLE_OCR_ACCESS_TOKEN`。
+   - `app/agents/llms.py`：`base_url` 硬编码为 `https://maas.qianwenaiapi.com/compatible-mode/v1`，模型名 `deepseek-v4.1-flash` / `qwen3.8-max`，仅 `api_key` 走环境变量 `DASHSCOPE_API_KEY`。
+   - `utils/ORC_ser.py`：OCR 调用硬编码为 `https://paddleocr.aistudio-app.com/api/v2/ocr/jobs`，仅 `access_token` 走环境变量 `PADDLE_OCR_ACCESS_TOKEN`。
 
-### 0.4 部署前代码修改（Linux/Docker 必需）
+### 0.4 依赖说明（Linux / Docker）
 
-修改 `pyproject.toml`，把 `pywin32` 一行改为带平台标记：
+`pyproject.toml` 中与部署相关的依赖：
 
-```diff
- dependencies = [
-     ...
--    "pywin32>=312",
-+    "pywin32>=312; sys_platform == 'win32'",
- ]
-```
+| 依赖 | 说明 |
+|------|------|
+| `uvicorn>=0.54.0` | ASGI 服务器，单进程模式使用 |
+| `gunicorn>=23.0.0; sys_platform != 'win32'` | 多进程模式使用（仅非 Windows 安装） |
+| `uvicorn-worker>=0.3.0; sys_platform != 'win32'` | gunicorn 的 ASGI worker 类（仅非 Windows 安装） |
+| `langgraph-checkpoint-postgres>=3.2.0` | LangGraph 的 PostgreSQL checkpointer |
+| `psycopg>=3.3.6` | PostgreSQL 异步驱动 |
 
-然后重新生成锁文件：
-
-```bash
-uv lock
-```
-
-> 说明：`utils/PDFser.py` 只在 Windows 分支下才 `import win32com`（懒加载），Linux 下 Word → PDF 走 LibreOffice 后端，因此移除 Linux 的 pywin32 不影响功能。
-> **Windows 裸机部署不需要此修改**（保留 pywin32，Word 转 PDF 走 Office COM，需服务器安装 Microsoft Office）。
+> `gunicorn` / `uvicorn-worker` 带平台标记，Windows 开发机不会安装 —— 这是
+> 刻意的：gunicorn 依赖 `os.fork`，在 Windows 上根本无法启动 worker。
+> Linux / Docker 环境下会正常安装。
 
 ---
 
@@ -261,7 +265,7 @@ openssl rand -hex 32   # 生成 REFRESH_SECRET
 ```bash
 cd /opt/simplejob
 
-# 确认已按 0.4 修改 pyproject.toml 并重新 uv lock
+# 安装依赖（Linux 下会一并装上 gunicorn / uvicorn-worker）
 uv lock
 uv sync                    # 创建 .venv 并安装全部依赖
 
@@ -282,7 +286,6 @@ SQL
 # 2) 执行迁移（项目根目录有 alembic.ini 和 alembic/ 目录）
 cd /opt/simplejob
 uv run alembic upgrade head
-# 正常输出结尾：... Running upgrade  -> ed3f50bb8cea, add error message to candidates.
 
 # 3) 初始化种子数据（8 个部门 + 9 个测试账号）
 uv run python init_data.py
@@ -306,7 +309,7 @@ node -v   # 应 >= v24.12.0
 # 安装依赖（package-lock.json 已随仓库提交，用 npm ci 保证可重复）
 npm ci
 
-# 生产环境变量：设为空字符串 = 前端请求与站点同源，由 Nginx 反代到后端
+# 生产环境变量：设为空字符串 = 前端请求与站点同源，由 Nginx 反代
 echo 'VITE_API_BASE_URL=' > .env.production
 
 # 构建（type-check + vite build，产物在 dist/）
@@ -464,6 +467,8 @@ sudo systemctl list-timers | grep certbot
 sudo vim /etc/systemd/system/simplejob.service
 ```
 
+**单进程模式**（当前默认，最稳妥）：
+
 ```ini
 [Unit]
 Description=SimpleJob FastAPI backend
@@ -477,9 +482,6 @@ Group=simplejob
 WorkingDirectory=/opt/simplejob
 EnvironmentFile=/opt/simplejob/.env
 
-# 单 worker 运行（重要）：
-# MailManager（邮件机器人）在 FastAPI lifespan 中初始化，多 worker 会启动多套
-# IMAP 长连接与调度器，造成邮件重复拉取 / 游标竞争。
 ExecStart=/opt/simplejob/.venv/bin/uvicorn app.main:app \
     --host 127.0.0.1 \
     --port 8000 \
@@ -487,12 +489,21 @@ ExecStart=/opt/simplejob/.venv/bin/uvicorn app.main:app \
 
 Restart=always
 RestartSec=3
-# 日志同时进 journalctl 与 logs/ 目录
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
+```
+
+**多进程模式**（需先拆分邮件机器人，见 [第 3 章](#3-多进程--高并发部署gunicorn)）：
+
+```ini
+[Service]
+...
+ExecStart=/opt/simplejob/.venv/bin/gunicorn app.main:app \
+    -c /opt/simplejob/gunicorn.conf.py
+...
 ```
 
 启动：
@@ -537,18 +548,27 @@ sudo -u simplejob psql -h 127.0.0.1 -U simplejob -d hr_system -c "\dt"
 
 ### 1.12 日志查看
 
+日志系统由**独立监听进程统一落盘**（详见 [`logging_system.md`](logging_system.md)）：
+worker 只把记录丢进 `multiprocessing.Queue`，监听进程负责写文件与轮转。
+
 | 日志 | 位置 | 说明 |
 |------|------|------|
 | 服务日志（全量） | `logs/workflow.log` | 按天轮转，保留 30 天 |
-| 错误日志 | `logs/error.log` | 仅 ERROR，按大小轮转，保留 90 天 |
-| 工作流节点日志 | `logs/nodes.json` 同目录 `logs/nodes.log` | 状态图各节点执行记录，按天轮转 |
-| systemd 日志 | `journalctl -u simplejob -f` | 控制台输出 |
+| 错误日志 | `logs/error.log` | 仅 ERROR，50MB 轮转，保留 90 天 |
+| 工作流节点日志 | `logs/nodes.log` | 状态图各节点执行记录，按天轮转 |
+| 控制台输出 | `journalctl -u simplejob -f` | stdout / stderr |
 
 ```bash
 # 实时跟踪
 sudo tail -f /opt/simplejob/logs/workflow.log
 sudo journalctl -u simplejob -f
+
+# 多进程模式下确认监听进程存在（gunicorn 部署时）
+ps -ef | grep simplejob-logger
 ```
+
+> 单进程模式（`uvicorn --workers 1`）下日志由进程内的监听线程写入，
+> 不产生额外的监听进程。
 
 ### 1.13 数据备份
 
@@ -585,6 +605,9 @@ sudo systemctl restart simplejob
 sudo systemctl status simplejob
 ```
 
+> **多进程模式（gunicorn）下升级**：直接 `systemctl restart` 即可，gunicorn
+> master 会先终止旧 worker 再拉起新 worker，日志监听进程随 master 重启。
+
 ### 1.15 Windows Server 差异（简要）
 
 Windows 可以跑，但**生产推荐 Linux 或 Docker**。差异点：
@@ -594,7 +617,8 @@ Windows 可以跑，但**生产推荐 Linux 或 Docker**。差异点：
 | Python | 官网安装 3.13，或用 `uv python install 3.13` |
 | Node | 官网安装 24.x LTS |
 | PostgreSQL / Redis | 官方安装包；Redis 官方不支持 Windows，可用 Memurai 或 WSL2 |
-| pywin32 | **保留** `pyproject.toml` 原样（不做 0.4 的修改），Word 转 PDF 需安装 Microsoft Office |
+| pywin32 | 依赖声明带平台标记，Windows 下自动安装；Word 转 PDF 需安装 Microsoft Office |
+| gunicorn | **不可用**（依赖 `os.fork`）。Windows 上只能单进程跑 `uvicorn --workers 1` |
 | 进程守护 | 用 NSSM 或计划任务，不建议生产使用 |
 | 邮件/OCR/LLM | 配置完全相同 |
 
@@ -604,7 +628,7 @@ Windows 可以跑，但**生产推荐 Linux 或 Docker**。差异点：
 
 ### 2.1 文件清单与目录规划
 
-在仓库根目录新建以下文件（本文 [2.2](#22-dockerignore) ~ [2.6](#26-docker-composeyml) 给出完整内容，直接创建即可）：
+在仓库根目录新建以下文件（本文 [2.2](#22-dockerignore) ~ [2.7](#27-caddyfile自动-https) 给出完整内容，直接创建即可）：
 
 ```
 simplejob/
@@ -613,6 +637,7 @@ simplejob/
 │   └── Dockerfile.frontend       # 前端构建 + Nginx 镜像
 ├── docker-compose.yml            # 编排：postgres / redis / app / web / caddy
 ├── Caddyfile                     # 自动 HTTPS（3 行配置）
+├── gunicorn.conf.py              # 多进程模式的 gunicorn 配置
 ├── .dockerignore                  # 排除 .venv / node_modules 等大目录
 ├── .env                           # 与裸机方案共用同一份配置
 └── data/                         # 运行时数据（首次部署前创建）
@@ -628,7 +653,7 @@ simplejob/
 # Ubuntu 24.04 安装示例
 curl -fsSL https://get.docker.com | sudo sh
 sudo systemctl enable --now docker
-docker --version        # >= 24
+docker --version        # >= 24.0
 docker compose version  # >= 2.20
 ```
 
@@ -686,6 +711,7 @@ RUN uv sync --frozen --no-dev
 # 复制源码
 COPY . .
 
+
 # ==================== 运行阶段 ====================
 FROM python:3.13-slim AS runtime
 
@@ -706,6 +732,7 @@ COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
 COPY templates ./templates
 COPY main.py init_data.py check_column.py ./
+COPY gunicorn.conf.py ./gunicorn.conf.py
 
 # 运行时目录（卷挂载点）
 RUN mkdir -p /app/upload /app/attachments /app/logs
@@ -721,13 +748,15 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/ || exit 1
 
-# 单 worker（原因见 0.3 第 4 条：邮件机器人多进程冲突）
+# 单进程模式（默认，最稳妥）
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# 多进程模式（需先拆分邮件机器人）：
+# CMD ["gunicorn", "app.main:app", "-c", "gunicorn.conf.py"]
 ```
 
 > **说明**：
 > - `libreoffice-writer-nogui` 是 Debian 12（bookworm）的无界面精简包；若该包不可用，改为 `libreoffice-writer`。
-> - 构建前请确认已按 [0.4](#04-部署前代码修改linuxdocker-必需) 修改 `pyproject.toml` 并重新 `uv lock`，否则 `uv sync --frozen` 会因 pywin32 无 Linux wheel 而失败。
+> - `pyproject.toml` 里 `gunicorn` / `uvicorn-worker` 带平台标记，Linux 镜像里会正常安装。
 
 ### 2.4 Dockerfile.frontend
 
@@ -968,22 +997,20 @@ touch data/mailbot_state.json      # 必须是文件！否则 Docker 会创建�
 ### 2.9 首次部署步骤
 
 ```bash
-# 0) 前置：确认已按 0.4 修改 pyproject.toml 并 uv lock（Linux 构建必需）
-
-# 1) 启动基础设施
+# 0) 启动基础设施
 docker compose up -d postgres redis
 
-# 2) 构建镜像（首次约 3-8 分钟，取决于网络与机器）
+# 1) 构建镜像（首次约 3-8 分钟，取决于网络与机器）
 docker compose build app web
 
-# 3) 初始化数据库（依赖已 healthy，自动等待）
+# 2) 初始化数据库（依赖已 healthy，自动等待）
 docker compose run --rm app uv run alembic upgrade head
 docker compose run --rm app uv run python init_data.py
 
-# 4) 启动全部服务
+# 3) 启动全部服务
 docker compose up -d
 
-# 5) 查看状态
+# 4) 查看状态
 docker compose ps
 docker compose logs -f app
 ```
@@ -1078,18 +1105,119 @@ docker compose down -v               # -v 会删除数据卷，生产禁用
 | 事项 | 说明 |
 |------|------|
 | **IMAP 长连接** | 邮件机器人保持 IMAP 长连接，容器网络需能出网访问 `imap.163.com:993` / `smtp.163.com:465`（云服务器注意安全组出站规则） |
-| **时区** | 容器已设 `TZ=Asia/Shanghai`；业务时间由代码固定为 UTC+8（`utils/time_ISO8601_datatime.py`），与系统时区无关，日志时间显示为本地时间 |
+| **时区** | 容器已设 `TZ=Asia/Shanghai`；业务时间由代码固定为 UTC+8（`utils/time_ISO8601_datatime.py`），与系统时区无关 |
 | **LibreOffice 体积** | 安装 LibreOffice 后镜像约增加 300-500MB；纯 PDF/图片简历场景可删除 Dockerfile.backend 中的 `libreoffice-writer-nogui` |
-| **单副本限制** | 如前所述，**不要对 app 服务做水平扩展**（多副本 = 多个邮件机器人）。需要更高并发时，应把邮件机器人拆为独立服务（项目自带 `utils/emailbot/main.py` 独立运行模式） |
+| **单副本限制** | **不要对 app 服务做水平扩展**（多副本 = 多个邮件机器人）。需要更高并发时，应把邮件机器人拆为独立服务（项目自带 `utils/emailbot/main.py` 独立运行模式），再用 gunicorn 多进程（见第 3 章） |
 | **.env 敏感信息** | `.env` 不进镜像（未 COPY），仅运行时注入；镜像分层中不含密钥 |
 | **健康检查** | app 的 HEALTHCHECK 用 `/`（无需认证）；postgres/redis 用各自客户端探测 |
 | **首次启动顺序** | `depends_on + condition: service_healthy` 保证 app 等数据库就绪后再启动 |
 
 ---
 
-## 3. 附录
+## 3. 多进程 / 高并发部署（gunicorn）
 
-### 3.1 环境变量完整参考表
+### 3.1 为什么用 gunicorn 而不是 `uvicorn --workers N`
+
+两者都能起多进程，但日志架构对进程创建方式有要求：
+
+| 方式 | 进程启动方式 | worker 能否拿到共享日志队列 |
+|---|---|---|
+| `uvicorn --workers N` | **spawn**（`uvicorn/_subprocess.py` 写死 `get_context("spawn")`） | ❌ 全新解释器，拿不到 `multiprocessing.Queue` |
+| `gunicorn -k uvicorn_worker.UvicornWorker` | **fork**（`arbiter.py` 的 `spawn_worker()` 用 `os.fork()`） | ✅ 队列随 fork 继承 |
+
+项目的日志系统要求：主进程创建 `multiprocessing.Queue` + 独立日志监听进程，
+worker 只挂 `QueueHandler` 把记录入队。spawn 的 worker 无法继承队列，因此
+**多进程部署必须走 gunicorn**。
+
+### 3.2 前置条件：拆分邮件机器人
+
+这是**唯一的业务阻塞项**（与日志无关）：
+
+`MailManager` 在 FastAPI `lifespan` 中初始化，多进程会各自启动一套 IMAP
+长连接 + APScheduler 调度器 → 重复拉取邮件、`mailbot_state.json` 游标竞争。
+
+两种解法：
+
+1. **独立部署邮件机器人**（推荐）：用项目自带的 `utils/emailbot/main.py`
+   单独跑一个进程，并把它从 Web 服务的 lifespan 中摘掉。
+2. **选一个 worker 专门跑机器人**：通过环境变量让只有一个 worker 初始化
+   `MailManager`，其余 worker 跳过（需要改代码）。
+
+在拆分完成前，`gunicorn.conf.py` 里的 `workers` 保持 `1`。
+
+### 3.3 调整数据库连接池
+
+多进程下每个 worker 都有自己的一套连接池（`app/core/db.py`）：
+
+```python
+pool_size=10,       # 常驻
+max_overflow=20,    # 峰值 30
+```
+
+**总连接数 ≈ workers × 30**，必须小于 PostgreSQL 的 `max_connections`（默认 100）。
+
+| workers | 单 worker 建议配置 | 峰值总连接 |
+|---|---|---|
+| 1 | `pool_size=10, max_overflow=20` | 30 |
+| 2 | `pool_size=5, max_overflow=10` | 30 |
+| 4 | `pool_size=3, max_overflow=6` | 36 |
+
+修改 `app/core/db.py` 后重启服务生效。
+
+### 3.4 启动命令
+
+```bash
+cd /opt/simplejob
+
+# 单进程（默认，最稳妥）
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+
+# 多进程（需先完成 3.2）
+uv run gunicorn app.main:app -c gunicorn.conf.py
+# 或临时指定 worker 数：
+uv run gunicorn app.main:app -c gunicorn.conf.py -w 4
+```
+
+`gunicorn.conf.py` 关键配置：
+
+```python
+worker_class = "uvicorn_worker.UvicornWorker"   # gunicorn 的 ASGI worker
+bind = "127.0.0.1:8000"
+workers = 1
+
+def when_ready(server):
+    # master 在 fork worker 之前执行：创建队列 + 启动日志监听进程
+    from app.core.logging_config import bootstrap_logging
+    bootstrap_logging()
+
+def on_exit(server):
+    from app.core.logging_config import stop_logging_server
+    stop_logging_server()
+```
+
+> `uvicorn.workers.UvicornWorker` 已被 uvicorn 官方标记为 deprecated，
+> 请使用独立包 `uvicorn-worker` 的 `uvicorn_worker.UvicornWorker`。
+
+### 3.5 进程与日志架构
+
+```
+gunicorn master（主进程）
+  ├─ multiprocessing.Queue
+  ├─ simplejob-logger（日志监听进程，全局唯一写盘者）
+  └─ worker × N（只有 QueueHandler，不碰日志文件）
+```
+
+- **进程守护**：裸机用 systemd（见 [1.10](#110-配置-systemd-进程守护)），
+  Docker 用 `docker compose restart`。
+- **查看监听进程**：`ps -ef | grep simplejob-logger`
+- **日志文件**：仍在 `logs/` 下，路径与单进程模式一致，轮转策略不变。
+- **详细设计**：见 [`logging_system.md`](logging_system.md)。
+
+---
+
+## 4. 附录
+
+### 4.1 环境变量完整参考表
 
 | 变量 | 必填 | 默认值 | 说明 |
 |------|:---:|--------|------|
@@ -1122,6 +1250,7 @@ docker compose down -v               # -v 会删除数据卷，生产禁用
 | `DASHSCOPE_API_KEY` | ✅ | — | 通义千问 / DashScope API Key（LLM 用） |
 | `PADDLE_OCR_ACCESS_TOKEN` | | — | PaddleOCR 云服务 Token |
 | `GRAPH_OPEN` | | `False` | **生产建议 `True`**（启用 LangGraph 状态图工作流） |
+| `NODE_LOGGER_NAME` | | `workflow.nodes` | 工作流节点日志的 logger 名，决定哪些记录写入 `logs/nodes.log`（见 [`logging_system.md`](logging_system.md) 4.7） |
 | `SCORE_PASS_THRESHOLD` | | `7` | AI 评分通过阈值（`overall_score > 阈值` 通过） |
 | `MAX_NEGOTIATION_ROUNDS` | | `3` | 面试时间协商轮次上限 |
 | `AM_WINDOW_START_HOUR` / `AM_WINDOW_END_HOUR` | | `9` / `12` | 上午面试时间窗口 |
@@ -1130,7 +1259,7 @@ docker compose down -v               # -v 会删除数据卷，生产禁用
 
 > 完整字段以 `app/core/config.py` 为准；`.env` 中未声明的字段使用代码默认值。
 
-### 3.2 端口清单
+### 4.2 端口清单
 
 | 端口 | 服务 | 暴露建议 |
 |------|------|---------|
@@ -1140,7 +1269,7 @@ docker compose down -v               # -v 会删除数据卷，生产禁用
 | 6379 | Redis | 仅内网 / 127.0.0.1 |
 | 993 / 465 | 邮件服务器 | 出站方向（服务器 → 邮件服务商） |
 
-### 3.3 验证命令速查
+### 4.3 验证命令速查
 
 ```bash
 # 后端存活
@@ -1165,26 +1294,34 @@ redis-cli -h 127.0.0.1 ping
 
 # 邮件机器人（日志关键字）
 grep -iE "imap|mailbot|mail" logs/workflow.log | tail -20
+
+# 多进程模式：确认日志监听进程
+ps -ef | grep simplejob-logger
 ```
 
-### 3.4 故障排查表
+### 4.4 故障排查表
 
 | 现象 | 可能原因 | 处理 |
 |------|---------|------|
 | 启动报 `ValidationError: MAIL_USERNAME/MAIL_PASSWORD/MAIL_FROM` | `.env` 缺必填项 | 按 1.5 补全 |
-| `uv sync` / 镜像构建失败：找不到 pywin32 Linux wheel | 未加平台标记 | 按 0.4 修改 `pyproject.toml` 并 `uv lock` |
+| `uv sync` / 镜像构建失败：找不到 pywin32 Linux wheel | 平台标记异常 | 确认 `pyproject.toml` 中为 `pywin32>=312; sys_platform == 'win32'` |
 | 后端启动即退出，日志含 `mailbot` / IMAP 错误 | 邮箱授权码错误 / 端口不通 | 检查 `MAIL_PASSWORD`（授权码）、`IMAP_HOST`、出站 993 端口 |
 | 登录接口 401 | 账号密码错误或 Token 过期 | 用初始账号验证；确认 `ACCESS_SECRET` 未在重建后变化（变化会导致已签发 Token 全部失效） |
 | 前端页面能开但接口 404 | Nginx 未反代 API 前缀 | 检查 `location /user/`、`/position/`、`/candidate/`、`/media/` 配置 |
 | 前端报跨域错误 | `VITE_API_BASE_URL` 指向了不同域名 | 同源部署（空串）；跨域需确认后端 CORS 配置（`app/main.py` 当前为 `allow_origins=["*"]`，允许） |
-| 上传 Word 简历后解析失败 | 缺 LibreOffice / Office | Linux 装 LibreOffice；Windows 装 Office + 保留 pywin32 |
+| 上传 Word 简历后解析失败 | 缺 LibreOffice / Office | Linux 装 LibreOffice；Windows 装 Office |
 | 钉钉授权回调失败 | `BACKEND_BASE_URL` 非公网 HTTPS | 改为公网域名；确认 443 可达、证书有效 |
 | 容器内 `mailbot_state.json` 报 `Is a directory` | 宿主机未先 `touch` | 删除错误目录，`touch` 后重新挂载 |
 | 时间相关显示差 8 小时 | 系统时区 | 业务时间固定 UTC+8 不受影响；日志时间设置 `TZ=Asia/Shanghai` |
 | 上传文件重启后丢失 | 卷未挂载 / 挂载点错误 | 检查 `data/upload` 等卷挂载与目录权限 |
 | 收不到候选人邮件回复 | 邮件机器人未启动 / IMAP 断线 | 查看日志；确认容器/服务能出网；`mailbot_state.json` 是否损坏（可备份后清空重试） |
+| **`uvicorn --workers N` 启动后日志互相覆盖 / 轮转报错** | uvicorn 用 spawn，worker 拿不到共享队列 | 改用 `gunicorn -c gunicorn.conf.py`（见第 3 章） |
+| **多进程下日志文件交错、备份缺失** | 同上，退化成每个 worker 各写各的 | 同上 |
+| **`ModuleNotFoundError: langgraph.checkpoint.postgres`** | 依赖未安装完整 | 执行 `uv sync`（`langgraph-checkpoint-postgres` 已在 `pyproject.toml` 中声明） |
+| **gunicorn 启动报 `ModuleNotFoundError: gunicorn`** | 在 Windows 上运行，或未 `uv sync` | gunicorn 不支持 Windows；Linux 下确认 `uv sync` 已执行 |
+| **gunicorn 报 `No module named 'uvicorn.workers'`** | 用了已废弃的 worker 类 | 改为 `uvicorn_worker.UvicornWorker` |
 
-### 3.5 安全加固清单
+### 4.5 安全加固清单
 
 - [ ] 修改初始账号密码（`Boss` / `hr` 等默认 `111111`）
 - [ ] `ACCESS_SECRET` / `REFRESH_SECRET` 使用 `openssl rand -hex 32` 生成，不提交仓库
@@ -1196,8 +1333,9 @@ grep -iE "imap|mailbot|mail" logs/workflow.log | tail -20
 - [ ] 如前后端分离部署，收紧 CORS（`app/main.py` 中 `allow_origins=["*"]` 改为实际域名）
 - [ ] 定期备份数据库与 `data/` 目录（见 1.13 / 2.11）
 - [ ] 关注日志 `logs/error.log`，接入告警
+- [ ] 多进程部署前确认已拆分邮件机器人（见 3.2）
 
-### 3.6 常见业务配置
+### 4.6 常见业务配置
 
 | 需求 | 操作 |
 |------|------|
@@ -1208,6 +1346,7 @@ grep -iE "imap|mailbot|mail" logs/workflow.log | tail -20
 | 更换 LLM 服务商 | 修改 `app/agents/llms.py` 中 `base_url` 与 `model`（当前硬编码） |
 | 更换 OCR 服务商 | 修改 `utils/ORC_ser.py` 中 `job_url` 与模型名（当前硬编码） |
 | 邮件机器人独立部署（多副本场景） | 使用 `utils/emailbot/main.py` 独立运行，避免与 Web 服务同进程 |
+| 多进程 / 高并发 | 见 [第 3 章](#3-多进程--高并发部署gunicorn) |
 
 ---
 

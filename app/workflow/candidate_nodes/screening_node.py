@@ -1,8 +1,10 @@
 import logging
+from app.core.config import get_settings
 from app.workflow.candidate_state import CandidateRecruitmentState
 from app.workflow.error_handler import node_error_wrapper
 
-logger = logging.getLogger("workflow.nodes")
+settings = get_settings()
+logger = logging.getLogger(settings.NODE_LOGGER_NAME)
 
 
 @node_error_wrapper

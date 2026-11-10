@@ -1,7 +1,9 @@
 import logging
+from app.core.config import get_settings
 from datetime import datetime
 
-logger = logging.getLogger("workflow.nodes")
+settings = get_settings()
+logger = logging.getLogger(settings.NODE_LOGGER_NAME)
 
 from app.core.exceptions import DingTalkServiceError, EmailSendError
 from app.service.dingtalk_ser import get_user_available_slots

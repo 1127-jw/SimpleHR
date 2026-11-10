@@ -30,7 +30,7 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from app.core.logging_config import setup_logging
+    from app.core.logging_config import setup_logging, stop_logging
     setup_logging(level="INFO")
     await init_redis()
     await MailManager.init(
@@ -45,6 +45,7 @@ async def lifespan(app: FastAPI):
 
     await MailManager.close()
     await close_redis()
+    stop_logging()
 
 
 def create_app() -> FastAPI:

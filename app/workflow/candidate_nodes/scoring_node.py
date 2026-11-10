@@ -1,9 +1,11 @@
 import logging
+from app.core.config import get_settings
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain_core.prompts import ChatPromptTemplate
 
-logger = logging.getLogger("workflow.nodes")
+settings = get_settings()
+logger = logging.getLogger(settings.NODE_LOGGER_NAME)
 
 from app.agents.llms import deepseek_llm, qwen_llm
 from app.agents.prompts import (

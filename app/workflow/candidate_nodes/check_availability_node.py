@@ -4,7 +4,6 @@ from langgraph.types import interrupt
 from langchain.agents import create_agent
 import logging
 
-logger = logging.getLogger("workflow.nodes")
 
 from app.agents.prompts import PROPOSED_TIME_SYSTEM_PROMPT
 from app.core.config import get_settings
@@ -24,7 +23,7 @@ from pydantic import BaseModel, Field
 from utils.time_ISO8601_datatime import BEIJING_TZ, now_beijing
 
 settings = get_settings()
-
+logger = logging.getLogger(settings.NODE_LOGGER_NAME)
 
 # ==================== Schema ====================
 class ProposedTime(BaseModel):

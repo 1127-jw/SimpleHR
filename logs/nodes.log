@@ -1,98 +1,10 @@
-2026-11-08 18:02:54 | INFO     | workflow.nodes:screening_node:15 | MainThread | [screening] start | candidate_id=fumqCN6JQ9CyZfPbxUcHKH
-2026-11-08 18:02:54 | INFO     | workflow.nodes:screening_node:30 | MainThread | [screening] passed | candidate_id=fumqCN6JQ9CyZfPbxUcHKH
-2026-11-08 18:02:54 | INFO     | workflow.nodes:scoring_node:48 | MainThread | [scoring] start | candidate_id=fumqCN6JQ9CyZfPbxUcHKH | threshold=7
-2026-11-08 18:02:59 | INFO     | workflow.nodes:scoring_node:65 | MainThread | [scoring] LLM scored | candidate_id=fumqCN6JQ9CyZfPbxUcHKH | overall_score=9
-2026-11-08 18:02:59 | INFO     | workflow.nodes:scoring_node:94 | MainThread | [scoring] score saved to DB | candidate_id=fumqCN6JQ9CyZfPbxUcHKH
-2026-11-08 18:02:59 | INFO     | workflow.nodes:scoring_node:98 | MainThread | [scoring] done | candidate_id=fumqCN6JQ9CyZfPbxUcHKH | score=9 | next_stage=email_invite
-2026-11-08 18:02:59 | INFO     | workflow.nodes:email_invite_node:50 | MainThread | [email_invite] start | candidate_id=fumqCN6JQ9CyZfPbxUcHKH
-2026-11-08 18:03:00 | INFO     | workflow.nodes:email_invite_node:85 | MainThread | [email_invite] proposed time | candidate_id=fumqCN6JQ9CyZfPbxUcHKH | time=2026-11-09 09:00:00+08:00
-2026-11-08 18:03:01 | INFO     | workflow.nodes:email_invite_node:102 | MainThread | [email_invite] invite sent | candidate_id=fumqCN6JQ9CyZfPbxUcHKH
-2026-11-08 18:03:01 | INFO     | workflow.nodes:get_candidate_email_reply_node:129 | asyncio_0 | [email_reply] waiting for candidate reply | candidate_id=fumqCN6JQ9CyZfPbxUcHKH
-2026-11-08 18:03:22 | INFO     | workflow.nodes:screening_node:15 | MainThread | [screening] start | candidate_id=aHTF2zpnDaXrVq7qhCskqj
-2026-11-08 18:03:22 | INFO     | workflow.nodes:screening_node:30 | MainThread | [screening] passed | candidate_id=aHTF2zpnDaXrVq7qhCskqj
-2026-11-08 18:03:22 | INFO     | workflow.nodes:scoring_node:48 | MainThread | [scoring] start | candidate_id=aHTF2zpnDaXrVq7qhCskqj | threshold=7
-2026-11-08 18:03:27 | INFO     | workflow.nodes:scoring_node:65 | MainThread | [scoring] LLM scored | candidate_id=aHTF2zpnDaXrVq7qhCskqj | overall_score=8
-2026-11-08 18:03:27 | INFO     | workflow.nodes:scoring_node:94 | MainThread | [scoring] score saved to DB | candidate_id=aHTF2zpnDaXrVq7qhCskqj
-2026-11-08 18:03:27 | INFO     | workflow.nodes:scoring_node:98 | MainThread | [scoring] done | candidate_id=aHTF2zpnDaXrVq7qhCskqj | score=8 | next_stage=email_invite
-2026-11-08 18:03:27 | INFO     | workflow.nodes:email_invite_node:50 | MainThread | [email_invite] start | candidate_id=aHTF2zpnDaXrVq7qhCskqj
-2026-11-08 18:03:28 | INFO     | workflow.nodes:email_invite_node:85 | MainThread | [email_invite] proposed time | candidate_id=aHTF2zpnDaXrVq7qhCskqj | time=2026-11-09 09:00:00+08:00
-2026-11-08 18:03:28 | INFO     | workflow.nodes:email_invite_node:102 | MainThread | [email_invite] invite sent | candidate_id=aHTF2zpnDaXrVq7qhCskqj
-2026-11-08 18:03:28 | INFO     | workflow.nodes:get_candidate_email_reply_node:129 | asyncio_0 | [email_reply] waiting for candidate reply | candidate_id=aHTF2zpnDaXrVq7qhCskqj
-2026-11-08 18:04:09 | INFO     | workflow.nodes:get_candidate_email_reply_node:129 | asyncio_0 | [email_reply] waiting for candidate reply | candidate_id=aHTF2zpnDaXrVq7qhCskqj
-2026-11-08 18:04:09 | INFO     | workflow.nodes:get_candidate_email_reply_node:133 | asyncio_0 | [email_reply] resumed | candidate_id=aHTF2zpnDaXrVq7qhCskqj | reply=候选人回复了以下邮件，请根据回复内容决定下一步操作：
-
-主题：回复：面试邀请-协商面试时间
-
-内容：明天不方便，改为后天下午三点可以吗
-2026-11-08 18:04:09 | INFO     | workflow.nodes:check_availability_node:235 | MainThread | [check_avail] start | candidate_id=aHTF2zpnDaXrVq7qhCskqj
-2026-11-08 18:04:11 | INFO     | workflow.nodes:check_availability_node:269 | MainThread | [check_avail] checking availability | candidate_id=aHTF2zpnDaXrVq7qhCskqj | proposed=2026-11-10 15:00:00+08:00 | exactly=hours
-2026-11-08 18:04:12 | INFO     | workflow.nodes:check_availability_node:311 | MainThread | [check_avail] slot available | candidate_id=aHTF2zpnDaXrVq7qhCskqj | time=2026-11-10 15:00:00+08:00
-2026-11-08 18:04:12 | INFO     | workflow.nodes:confirm_node:34 | MainThread | [confirm] start | candidate_id=aHTF2zpnDaXrVq7qhCskqj
-2026-11-08 18:04:12 | INFO     | workflow.nodes:confirm_node:62 | MainThread | [confirm] interview record created | candidate_id=aHTF2zpnDaXrVq7qhCskqj
-2026-11-08 18:04:12 | INFO     | workflow.nodes:confirm_node:97 | MainThread | [confirm] calendar created | candidate_id=aHTF2zpnDaXrVq7qhCskqj
-2026-11-08 18:04:13 | INFO     | workflow.nodes:confirm_node:123 | MainThread | [confirm] done | candidate_id=aHTF2zpnDaXrVq7qhCskqj
-2026-11-08 18:04:53 | INFO     | workflow.nodes:screening_node:15 | MainThread | [screening] start | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:04:53 | INFO     | workflow.nodes:screening_node:30 | MainThread | [screening] passed | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:04:53 | INFO     | workflow.nodes:scoring_node:48 | MainThread | [scoring] start | candidate_id=2o5v26heCeYJnder5E5SC7 | threshold=7
-2026-11-08 18:04:57 | INFO     | workflow.nodes:scoring_node:65 | MainThread | [scoring] LLM scored | candidate_id=2o5v26heCeYJnder5E5SC7 | overall_score=9
-2026-11-08 18:04:57 | INFO     | workflow.nodes:scoring_node:94 | MainThread | [scoring] score saved to DB | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:04:57 | INFO     | workflow.nodes:scoring_node:98 | MainThread | [scoring] done | candidate_id=2o5v26heCeYJnder5E5SC7 | score=9 | next_stage=email_invite
-2026-11-08 18:04:57 | INFO     | workflow.nodes:email_invite_node:50 | MainThread | [email_invite] start | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:04:58 | INFO     | workflow.nodes:email_invite_node:85 | MainThread | [email_invite] proposed time | candidate_id=2o5v26heCeYJnder5E5SC7 | time=2026-11-09 09:00:00+08:00
-2026-11-08 18:04:58 | INFO     | workflow.nodes:email_invite_node:102 | MainThread | [email_invite] invite sent | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:04:58 | INFO     | workflow.nodes:get_candidate_email_reply_node:129 | asyncio_0 | [email_reply] waiting for candidate reply | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:05:29 | INFO     | workflow.nodes:get_candidate_email_reply_node:129 | asyncio_1 | [email_reply] waiting for candidate reply | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:05:29 | INFO     | workflow.nodes:get_candidate_email_reply_node:133 | asyncio_1 | [email_reply] resumed | candidate_id=2o5v26heCeYJnder5E5SC7 | reply=候选人回复了以下邮件，请根据回复内容决定下一步操作：
-
-主题：回复：面试邀请-协商面试时间
-
-内容：确认
-2026-11-08 18:05:29 | INFO     | workflow.nodes:check_availability_node:235 | MainThread | [check_avail] start | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:05:30 | INFO     | workflow.nodes:check_availability_node:254 | MainThread | [check_avail] candidate confirmed | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:05:30 | INFO     | workflow.nodes:confirm_node:34 | MainThread | [confirm] start | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:05:30 | INFO     | workflow.nodes:confirm_node:62 | MainThread | [confirm] interview record created | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:05:31 | INFO     | workflow.nodes:confirm_node:97 | MainThread | [confirm] calendar created | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:05:31 | INFO     | workflow.nodes:confirm_node:123 | MainThread | [confirm] done | candidate_id=2o5v26heCeYJnder5E5SC7
-2026-11-08 18:06:09 | INFO     | workflow.nodes:screening_node:15 | MainThread | [screening] start | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
-2026-11-08 18:06:09 | INFO     | workflow.nodes:screening_node:30 | MainThread | [screening] passed | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
-2026-11-08 18:06:09 | INFO     | workflow.nodes:scoring_node:48 | MainThread | [scoring] start | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN | threshold=7
-2026-11-08 18:06:14 | INFO     | workflow.nodes:scoring_node:65 | MainThread | [scoring] LLM scored | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN | overall_score=8
-2026-11-08 18:06:14 | INFO     | workflow.nodes:scoring_node:94 | MainThread | [scoring] score saved to DB | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
-2026-11-08 18:06:14 | INFO     | workflow.nodes:scoring_node:98 | MainThread | [scoring] done | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN | score=8 | next_stage=email_invite
-2026-11-08 18:06:14 | INFO     | workflow.nodes:email_invite_node:50 | MainThread | [email_invite] start | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
-2026-11-08 18:06:15 | INFO     | workflow.nodes:email_invite_node:85 | MainThread | [email_invite] proposed time | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN | time=2026-11-09 09:00:00+08:00
-2026-11-08 18:06:15 | INFO     | workflow.nodes:email_invite_node:102 | MainThread | [email_invite] invite sent | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
-2026-11-08 18:06:15 | INFO     | workflow.nodes:get_candidate_email_reply_node:129 | asyncio_1 | [email_reply] waiting for candidate reply | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
-2026-11-08 18:06:49 | INFO     | workflow.nodes:get_candidate_email_reply_node:129 | asyncio_2 | [email_reply] waiting for candidate reply | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
-2026-11-08 18:06:49 | INFO     | workflow.nodes:get_candidate_email_reply_node:133 | asyncio_2 | [email_reply] resumed | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN | reply=候选人回复了以下邮件，请根据回复内容决定下一步操作：
-
-主题：回复：面试邀请-协商面试时间
-
-内容：已经找到工作了，就不去面试了
-2026-11-08 18:06:49 | INFO     | workflow.nodes:check_availability_node:235 | MainThread | [check_avail] start | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
-2026-11-08 18:06:50 | INFO     | workflow.nodes:check_availability_node:245 | MainThread | [check_avail] candidate refused | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
-2026-11-08 18:06:50 | INFO     | workflow.nodes:refused_node:32 | MainThread | [refused] start | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
-2026-11-08 18:06:50 | INFO     | workflow.nodes:refused_node:41 | MainThread | [refused] status updated | candidate_id=cd3QhHJoEQ3q5BuDgmLPGN
-2026-11-09 20:37:02 | INFO     | workflow.nodes:screening_node:15 | MainThread | [screening] start | candidate_id=dzXGaDEgwoGaYLksivF3aW
-2026-11-09 20:37:02 | INFO     | workflow.nodes:screening_node:30 | MainThread | [screening] passed | candidate_id=dzXGaDEgwoGaYLksivF3aW
-2026-11-09 20:37:02 | INFO     | workflow.nodes:scoring_node:48 | MainThread | [scoring] start | candidate_id=dzXGaDEgwoGaYLksivF3aW | threshold=7
-2026-11-09 20:37:05 | INFO     | workflow.nodes:scoring_node:65 | MainThread | [scoring] LLM scored | candidate_id=dzXGaDEgwoGaYLksivF3aW | overall_score=8
-2026-11-09 20:37:05 | INFO     | workflow.nodes:scoring_node:94 | MainThread | [scoring] score saved to DB | candidate_id=dzXGaDEgwoGaYLksivF3aW
-2026-11-09 20:37:05 | INFO     | workflow.nodes:scoring_node:98 | MainThread | [scoring] done | candidate_id=dzXGaDEgwoGaYLksivF3aW | score=8 | next_stage=email_invite
-2026-11-09 20:37:05 | INFO     | workflow.nodes:email_invite_node:50 | MainThread | [email_invite] start | candidate_id=dzXGaDEgwoGaYLksivF3aW
-2026-11-09 20:37:06 | INFO     | workflow.nodes:email_invite_node:85 | MainThread | [email_invite] proposed time | candidate_id=dzXGaDEgwoGaYLksivF3aW | time=2026-11-10 09:00:00+08:00
-2026-11-09 20:37:06 | INFO     | workflow.nodes:email_invite_node:102 | MainThread | [email_invite] invite sent | candidate_id=dzXGaDEgwoGaYLksivF3aW
-2026-11-09 20:37:06 | INFO     | workflow.nodes:get_candidate_email_reply_node:129 | asyncio_1 | [email_reply] waiting for candidate reply | candidate_id=dzXGaDEgwoGaYLksivF3aW
-2026-11-09 20:37:43 | INFO     | workflow.nodes:get_candidate_email_reply_node:129 | asyncio_1 | [email_reply] waiting for candidate reply | candidate_id=dzXGaDEgwoGaYLksivF3aW
-2026-11-09 20:37:43 | INFO     | workflow.nodes:get_candidate_email_reply_node:133 | asyncio_1 | [email_reply] resumed | candidate_id=dzXGaDEgwoGaYLksivF3aW | reply=候选人回复了以下邮件，请根据回复内容决定下一步操作：
-
-主题：回复：面试邀请-协商面试时间
-
-内容：11日下午3点可以吗
-2026-11-09 20:37:43 | INFO     | workflow.nodes:check_availability_node:235 | MainThread | [check_avail] start | candidate_id=dzXGaDEgwoGaYLksivF3aW
-2026-11-09 20:37:45 | INFO     | workflow.nodes:check_availability_node:269 | MainThread | [check_avail] checking availability | candidate_id=dzXGaDEgwoGaYLksivF3aW | proposed=2026-11-11 15:00:00+08:00 | exactly=hours
-2026-11-09 20:37:45 | INFO     | workflow.nodes:check_availability_node:311 | MainThread | [check_avail] slot available | candidate_id=dzXGaDEgwoGaYLksivF3aW | time=2026-11-11 15:00:00+08:00
-2026-11-09 20:37:45 | INFO     | workflow.nodes:confirm_node:34 | MainThread | [confirm] start | candidate_id=dzXGaDEgwoGaYLksivF3aW
-2026-11-09 20:37:45 | INFO     | workflow.nodes:confirm_node:62 | MainThread | [confirm] interview record created | candidate_id=dzXGaDEgwoGaYLksivF3aW
-2026-11-09 20:37:46 | INFO     | workflow.nodes:confirm_node:97 | MainThread | [confirm] calendar created | candidate_id=dzXGaDEgwoGaYLksivF3aW
-2026-11-09 20:37:46 | INFO     | workflow.nodes:confirm_node:123 | MainThread | [confirm] done | candidate_id=dzXGaDEgwoGaYLksivF3aW
+2026-11-10 11:23:55 | INFO     | workflow.nodes:screening_node:17 | MainThread | [screening] start | candidate_id=PHYN94iWrZMfUv4r3DYRAp
+2026-11-10 11:23:55 | INFO     | workflow.nodes:screening_node:32 | MainThread | [screening] passed | candidate_id=PHYN94iWrZMfUv4r3DYRAp
+2026-11-10 11:23:55 | INFO     | workflow.nodes:scoring_node:50 | MainThread | [scoring] start | candidate_id=PHYN94iWrZMfUv4r3DYRAp | threshold=7
+2026-11-10 11:24:01 | INFO     | workflow.nodes:scoring_node:67 | MainThread | [scoring] LLM scored | candidate_id=PHYN94iWrZMfUv4r3DYRAp | overall_score=8
+2026-11-10 11:24:01 | INFO     | workflow.nodes:scoring_node:96 | MainThread | [scoring] score saved to DB | candidate_id=PHYN94iWrZMfUv4r3DYRAp
+2026-11-10 11:24:01 | INFO     | workflow.nodes:scoring_node:100 | MainThread | [scoring] done | candidate_id=PHYN94iWrZMfUv4r3DYRAp | score=8 | next_stage=email_invite
+2026-11-10 11:24:01 | INFO     | workflow.nodes:email_invite_node:52 | MainThread | [email_invite] start | candidate_id=PHYN94iWrZMfUv4r3DYRAp
+2026-11-10 11:24:02 | INFO     | workflow.nodes:email_invite_node:87 | MainThread | [email_invite] proposed time | candidate_id=PHYN94iWrZMfUv4r3DYRAp | time=2026-11-11 09:00:00+08:00
+2026-11-10 11:24:02 | INFO     | workflow.nodes:email_invite_node:104 | MainThread | [email_invite] invite sent | candidate_id=PHYN94iWrZMfUv4r3DYRAp
+2026-11-10 11:24:02 | INFO     | workflow.nodes:get_candidate_email_reply_node:128 | asyncio_0 | [email_reply] waiting for candidate reply | candidate_id=PHYN94iWrZMfUv4r3DYRAp

@@ -114,6 +114,9 @@ class Settings(BaseSettings):
     PM_WINDOW_START_HOUR: int = Field(default=14, description="下午面试窗口开始")
     PM_WINDOW_END_HOUR: int = Field(default=18, description="下午面试窗口结束")
 
+    # ---------- 日志系统 ----------
+    NODE_LOGGER_NAME:str = Field(default= "workflow.nodes",description="工作流节点日志文件")
+
     @computed_field
     @property
     def am_window(self) -> tuple:
