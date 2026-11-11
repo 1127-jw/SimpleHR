@@ -13,6 +13,7 @@ class AgentCandidateSchema(BaseModel):
     self_evaluation: str | None = Field(None, description="候选人自我评价")
     other_information: str | None = Field(None, description="候选人其他信息")
     skills: str | None = Field(None, description="候选人技能")
+    work_year:int =Field(0, description="候选人工作经验")
 
     model_config = ConfigDict(from_attributes=True)
 

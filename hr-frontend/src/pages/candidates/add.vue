@@ -55,6 +55,17 @@
           <el-form-item label="邮箱">
             <el-input v-model="ocrResult.email"></el-input>
           </el-form-item>
+          <el-form-item label="工作经验（年）">
+            <el-input-number
+              v-model="ocrResult.work_year"
+              :min="0"
+              :max="50"
+              :precision="0"
+              placeholder="由简历自动提取，可手动调整"
+              style="width: 240px"
+            />
+            <span class="ml-2 text-xs text-gray-400">简历未明确写明时，取最早项目开始到最晚项目结束的年限</span>
+          </el-form-item>
           <el-form-item label="教育经历">
             <el-input type="textarea" v-model="ocrResult.education_experience" :rows="3"></el-input>
           </el-form-item>
@@ -119,6 +130,7 @@ interface OcrResult {
   skills: string
   self_evaluation: string
   other_information: string
+  work_year: number | null
 }
 
 const POLL_INTERVAL_MS = 3000
@@ -167,9 +179,12 @@ const normalizeOcrResult = (ocrResp: ResumeOCRResult | null | undefined): Partia
     if (Object.prototype.hasOwnProperty.call(ocrResp, key)) {
       const value = ocrResp[key as keyof ResumeOCRResult]
       if (typeof value === 'string') {
-        processedOcrResult[key as keyof OcrResult] = value.replace(/\\n/g, '\n')
+        processedOcrResult[key as keyof OcrResult] = value.replace(/\\n/g, '\n') as never
+      } else if (typeof value === 'number') {
+        // work_year 是数字，直接保留
+        processedOcrResult[key as keyof OcrResult] = value as never
       } else if (value === null) {
-        processedOcrResult[key as keyof OcrResult] = ''
+        processedOcrResult[key as keyof OcrResult] = '' as never
       }
     }
   }

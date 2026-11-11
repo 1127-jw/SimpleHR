@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "refresh token 生命周期",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1060, 600]
+  },
+  "lanes": [
+    { "id": "main", "label": "token 状态" }
+  ],
+  "states": [
+    { "id": "issued", "type": "start", "label": "已签发", "lane": "main", "col": 0, "step": "01", "tag": "entry" },
+    { "id": "rotated", "type": "success", "label": "已轮换", "lane": "main", "col": 1, "step": "02", "tag": "done" },
+    { "id": "stale", "type": "failure", "label": "已失效", "lane": "main", "col": 2, "step": "03", "tag": "fail" },
+    { "id": "rejected", "type": "failure", "label": "刷新被拒", "lane": "main", "col": 3, "step": "04", "tag": "terminal" }
+  ],
+  "transitions": [
+    { "id": "issue-rotate", "from": "issued", "to": "rotated", "label": "refresh 成功", "labelDy": -34, "fromSide": "right", "toSide": "left", "route": "straight" },
+    { "id": "rotate-replay", "from": "rotated", "to": "stale", "label": "旧 token 重放", "labelDy": -34, "fromSide": "right", "toSide": "left", "route": "straight" },
+    { "id": "stale-reject", "from": "stale", "to": "rejected", "label": "再刷新即报错", "labelDy": -34, "fromSide": "right", "toSide": "left", "route": "straight" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "① 已签发（3 例）",
+      "items": [
+        "test_issue_tokens_has_correct_claims",
+        "test_issue_tokens_registers_refresh_jti",
+        "test_expiry_follows_settings"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "② 已轮换（3 例）",
+      "items": [
+        "test_refresh_rotates_and_invalidates_old_token",
+        "test_token_with_access_type_rejected_as_refresh",
+        "test_access_token_from_another_secret_is_rejected"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "③④ 失效与拒绝（4 例）",
+      "items": [
+        "test_expired_refresh_token_is_rejected",
+        "test_tampered_token_is_rejected",
+        "test_revoke_blocks_subsequent_refresh",
+        "test_revoke_with_garbage_token_is_noop"
+      ]
+    }
+  ]
+}

@@ -74,17 +74,21 @@ export const getAllDepartments = () => {
   return request.get<DepartmentListResponse>('/user/department/list')
 }
 
+export interface DingtalkUser {
+  id: string
+  nick: string
+  union_id: string
+  open_id: string
+  mobile: string
+  user_id: string
+}
+
 export const getDingtalkAuthorizeUrl = () => {
-  return request.get<{ authorization_url: string }>('/user/dingtalk/authorize')
+  return request.get<{ authorize_url: string }>('/user/dingtalk/authorize')
 }
 
 export const getDingtalkStatus = () => {
-  return request.get<{
-    dingding_user: null | {
-      nick: string
-      union_id: string
-    }
-  }>('/user/dingtalk/account')
+  return request.get<{ dingding_user: DingtalkUser | null }>('/user/dingtalk/account')
 }
 
 export const assignDepartments = (data: AssignDepartmentsSchema) => {

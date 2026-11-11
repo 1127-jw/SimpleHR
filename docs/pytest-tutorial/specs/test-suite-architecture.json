@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "pytest 测试套件：零依赖 IO 的测试边界",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1480, 820]
+  },
+  "components": [
+    { "id": "runner", "type": "backend", "label": "pytest -q · 46 个用例", "pos": [110, 150], "size": [270, 68] },
+    { "id": "conftest", "type": "backend", "label": "conftest.py · 4 个夹具", "pos": [520, 150], "size": [280, 68] },
+    { "id": "test_files", "type": "backend", "label": "test_*.py × 4 个文件", "pos": [310, 300], "size": [520, 68] },
+
+    { "id": "m_auth", "type": "backend", "label": "auth.py", "pos": [70, 560], "size": [190, 68] },
+    { "id": "m_exc", "type": "backend", "label": "exceptions.py + error_handler.py", "pos": [284, 560], "size": [250, 68] },
+    { "id": "m_graph", "type": "backend", "label": "candidate_graph.py + candidate_state.py", "pos": [558, 560], "size": [300, 68] },
+    { "id": "m_log", "type": "backend", "label": "logging_config.py + audit.py", "pos": [882, 560], "size": [250, 68] },
+
+    { "id": "infra", "type": "external", "label": "Redis · PostgreSQL · LLM · 邮件", "pos": [1190, 150], "size": [240, 68] },
+
+    { "id": "report", "type": "backend", "label": "终端报告 · 46 passed in 3.94s", "pos": [1190, 640], "size": [240, 68] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "tests/ · 测试侧（零 IO）", "wraps": ["runner", "conftest", "test_files"] },
+    { "kind": "region", "label": "app/ · 被测模块", "wraps": ["m_auth", "m_exc", "m_graph", "m_log"] },
+    { "kind": "region", "label": "生产依赖 · 测试中一律不启动", "wraps": ["infra"] }
+  ],
+  "connections": [
+    { "id": "boot-fixtures", "from": "runner", "to": "conftest", "label": "① 启动即加载" },
+    { "id": "collect-cases", "from": "runner", "to": "test_files", "label": "② 收集用例", "fromSide": "bottom", "toSide": "top" },
+    { "id": "inject-doubles", "from": "conftest", "to": "test_files", "label": "③ 注入替身", "fromSide": "bottom", "toSide": "top" },
+    { "id": "call-auth", "from": "test_files", "to": "m_auth", "label": "纯函数直调", "fromSide": "bottom", "toSide": "top" },
+    { "id": "call-exc", "from": "test_files", "to": "m_exc", "label": "装饰器行为", "fromSide": "bottom", "toSide": "top" },
+    { "id": "call-graph", "from": "test_files", "to": "m_graph", "label": "只调路由函数", "fromSide": "bottom", "toSide": "top" },
+    { "id": "call-log", "from": "test_files", "to": "m_log", "label": "真 handler + 临时目录", "fromSide": "bottom", "toSide": "top" },
+    { "id": "summarize", "from": "test_files", "to": "report", "label": "④ 汇总断言" },
+    { "id": "replaced-by-doubles", "from": "infra", "to": "conftest", "label": "被 FakeRedis / .tmp 替代", "variant": "dashed" }
+  ]
+}

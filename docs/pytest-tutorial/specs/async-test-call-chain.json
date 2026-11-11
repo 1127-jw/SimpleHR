@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "test_audit_payload_is_valid_json 的完整调用链",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1660, 860]
+  },
+  "participants": [
+    { "id": "pytest", "type": "external", "label": "pytest 运行器" },
+    { "id": "test", "type": "backend", "label": "async 测试函数" },
+    { "id": "cfg", "type": "backend", "label": "logging_config" },
+    { "id": "audit", "type": "backend", "label": "audit()" },
+    { "id": "queue", "type": "messagebus", "label": "QueueHandler → Queue" },
+    { "id": "listener", "type": "backend", "label": "QueueListener 线程" },
+    { "id": "files", "type": "database", "label": "logs/*.log" }
+  ],
+  "segments": [
+    { "from": 158, "to": 300, "label": "装配真实 logging 管道" },
+    { "from": 316, "to": 560, "label": "跑一次 audit 写入" },
+    { "from": 576, "to": 780, "label": "读回并断言" }
+  ],
+  "messages": [
+    { "from": "pytest", "to": "test", "y": 196, "label": "asyncio_mode=auto，直接 await", "variant": "emphasis" },
+    { "from": "test", "to": "cfg", "y": 240, "label": "_build_handlers(formatter, log_dir=work_dir)", "variant": "default" },
+    { "from": "cfg", "to": "files", "y": 284, "label": "mkdir + 打开 workflow/error/nodes/audit 四个文件", "variant": "default" },
+    { "from": "cfg", "to": "test", "y": 328, "label": "返回 5 个 handler", "variant": "return" },
+    { "from": "test", "to": "listener", "y": 372, "label": "QueueListener(...).start()", "variant": "emphasis" },
+    { "from": "test", "to": "queue", "y": 416, "label": "root.addHandler(QueueHandler)", "variant": "default" },
+    { "from": "test", "to": "audit", "y": 460, "label": "audit('resume.download', user_id='u-2')", "variant": "emphasis" },
+    { "from": "audit", "to": "queue", "y": 504, "label": "audit logger.info(JSON 行)", "variant": "default" },
+    { "from": "queue", "to": "listener", "y": 548, "label": "队列投递 LogRecord", "variant": "dashed" },
+    { "from": "listener", "to": "files", "y": 592, "label": "比对 handler.level 与 filter 后写入", "variant": "default" },
+    { "from": "test", "to": "files", "y": 636, "label": "read_text + json.loads", "variant": "default" },
+    { "from": "test", "to": "pytest", "y": 680, "label": "断言通过", "variant": "return" },
+    { "from": "test", "to": "listener", "y": 724, "label": "finally: stop() 投哨兵并排空", "variant": "dashed" }
+  ],
+  "activations": [
+    { "participant": "test", "from": 190, "to": 736, "type": "backend" },
+    { "participant": "cfg", "from": 234, "to": 336, "type": "backend" },
+    { "participant": "audit", "from": 454, "to": 512, "type": "backend" },
+    { "participant": "queue", "from": 410, "to": 556, "type": "messagebus" },
+    { "participant": "listener", "from": 366, "to": 600, "type": "backend" },
+    { "participant": "files", "from": 278, "to": 644, "type": "database" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "为什么不用假 handler", "items": ["真实 QueueHandler → Queue → QueueListener 才暴露「audit 没接进管道」", "5 个 handler 与 level/filter 组合都参与本次断言", "测试只替换 log_dir，不替换管道本身"] },
+    { "dot": "orange", "title": "线程与排空的边界", "items": ["listener.stop() 投哨兵，等队列真正排空后才读文件", "哨兵必须在读取前发出，否则漏行造成偶发失败", "finally 中恢复 root level 并移除 handler"] },
+    { "dot": "emerald", "title": "断言的真实落点", "items": ["读 audit.log 最后一行并 json.loads", "action / user_id / target 与 ts、request_id 全部存在", "校验的是落盘内容，不是内存里的 record"] }
+  ]
+}

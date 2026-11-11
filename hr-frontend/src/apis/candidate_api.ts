@@ -49,6 +49,7 @@ export interface ResumeOCRResult {
   self_evaluation?: string | null
   other_information?: string | null
   skills?: string | null
+  work_year?: number | null
 }
 
 export interface ResumeParseTaskInfoResponse {
@@ -97,6 +98,7 @@ export interface CandidateCreateData {
   self_evaluation?: string | null
   other_information?: string | null
   skills?: string | null
+  work_year?: number | null
   position_id: string
   resume_id: string
 }

@@ -1,0 +1,87 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "4 条路由函数 + 1 个 error 守卫",
+    "locale": "zh-CN",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "main", "label": "路由判定链" },
+    { "id": "reject", "label": "淘汰与超时", "variant": "exception" },
+    { "id": "accept", "label": "成交通道" }
+  ],
+  "mainPath": ["guard", "screening", "scoring", "invite", "reply", "avail", "confirmed"],
+  "nodes": [
+    { "id": "guard", "lane": "main", "col": 0, "type": "security", "label": "error 守卫", "width": 132 },
+    { "id": "screening", "lane": "main", "col": 1, "type": "backend", "label": "screening", "width": 132 },
+    { "id": "scoring", "lane": "main", "col": 2, "type": "backend", "label": "scoring", "width": 132 },
+    { "id": "invite", "lane": "main", "col": 3, "type": "backend", "label": "email_invite", "width": 132 },
+    { "id": "reply", "lane": "main", "col": 4, "type": "backend", "label": "收到回信", "width": 132 },
+    { "id": "avail", "lane": "main", "col": 5, "type": "backend", "label": "check_availability", "width": 156 },
+    { "id": "err", "lane": "reject", "col": 0, "type": "external", "label": "error 节点", "width": 132 },
+    { "id": "rejected", "lane": "reject", "col": 2, "type": "external", "label": "rejected", "width": 132 },
+    { "id": "expired", "lane": "reject", "col": 4, "type": "external", "label": "negotiation_expired", "width": 156 },
+    { "id": "refused", "lane": "reject", "col": 5, "type": "external", "label": "refused", "width": 132 },
+    { "id": "confirmed", "lane": "accept", "col": 5, "type": "external", "label": "confirm", "width": 132 }
+  ],
+  "edges": [
+    { "id": "e-guard-ok", "from": "guard", "to": "screening", "label": "否", "role": "main" },
+    { "id": "e-guard-err", "from": "guard", "to": "err", "label": "是", "role": "error", "variant": "security" },
+    { "id": "e-scr-pass", "from": "screening", "to": "scoring", "label": "通过", "role": "main" },
+    { "id": "e-scr-fail", "from": "screening", "to": "rejected", "label": "未通过", "role": "error", "variant": "security" },
+    { "id": "e-score-pass", "from": "scoring", "to": "invite", "label": "达标", "role": "main" },
+    { "id": "e-score-fail", "from": "scoring", "to": "rejected", "label": "不达标", "role": "error", "variant": "security" },
+    { "id": "e-invite", "from": "invite", "to": "reply", "label": "发邀约", "role": "main" },
+    { "id": "e-reply-timeout", "from": "reply", "to": "expired", "label": "超时", "role": "error", "variant": "security" },
+    { "id": "e-reply-ok", "from": "reply", "to": "avail", "label": "正常回复", "role": "main" },
+    { "id": "e-avail-refused", "from": "avail", "to": "refused", "label": "REFUSED", "role": "error", "variant": "security" },
+    { "id": "e-avail-confirmed", "from": "avail", "to": "confirmed", "label": "TIME_AVAILABLE", "role": "main" },
+    { "id": "e-avail-loop", "from": "avail", "to": "reply", "label": "继续协商", "role": "branch", "variant": "dashed", "route": "bottom-channel" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "① screening 之后",
+      "items": [
+        "screening_passed 为真 → scoring",
+        "未通过或字段缺失 → rejected"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "② scoring 之后",
+      "items": [
+        "8 > 7 → email_invite",
+        "7 > 7 为假 → rejected（严格大于）",
+        "score_result 为 None → rejected"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "③ 收到邮件回复",
+      "items": [
+        "等于 EMAIL_REPLY_TIMEOUT → negotiation_expired",
+        "其余 → check_availability"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "④ check_availability 之后",
+      "items": [
+        "REPLY_TIME_AVAILABLE → confirm",
+        "REPLY_REFUSED → refused",
+        "negotiation_round ≥ 上限 → negotiation_expired",
+        "否则回到等待回信"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "⑤ 统一 error 守卫",
+      "items": [
+        "4 条路由都被 _with_error_check 包住",
+        "error_occurred 为真 → 一律去 error 节点"
+      ]
+    }
+  ]
+}

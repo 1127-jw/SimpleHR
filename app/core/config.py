@@ -93,6 +93,8 @@ class Settings(BaseSettings):
     DINGTALK_CLIENT_SECRET: str = Field(default="", description="钉钉应用 Client Secret")
     #内网穿刺
     BACKEND_BASE_URL: str = Field(default="", description="后端基础 URL")
+    # 前端基础 URL：钉钉授权成功页跳转用（为空则跳后端根路径）
+    FRONTEND_BASE_URL: str = Field(default="", description="前端基础 URL")
 
     # ---------- 文件上传 ----------
     RESUME_DIR: str = Field(default=os.path.join(BASE_DIR, "upload"), description="简历上传目录")

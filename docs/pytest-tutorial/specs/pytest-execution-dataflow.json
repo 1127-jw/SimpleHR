@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "一次 pytest 运行的数据流",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1500, 780]
+  },
+  "stages": [
+    { "label": "配置" },
+    { "label": "夹具" },
+    { "label": "替身" },
+    { "label": "执行" },
+    { "label": "判定" }
+  ],
+  "nodes": [
+    { "id": "cfg", "type": "backend", "label": "pytest 配置", "stage": 0, "row": 2, "width": 120 },
+    { "id": "conftest", "type": "backend", "label": "conftest 夹具", "stage": 1, "row": 2, "width": 130 },
+    { "id": "fake", "type": "database", "label": "FakeRedis", "stage": 2, "row": 0, "width": 110 },
+    { "id": "tmp", "type": "external", "label": ".tmp 目录", "stage": 2, "row": 4, "width": 110 },
+    { "id": "call", "type": "backend", "label": "跑测试函数", "stage": 3, "row": 2, "width": 130 },
+    { "id": "verdict", "type": "backend", "label": "assert 判定", "stage": 4, "row": 2, "width": 120 }
+  ],
+  "flows": [
+    { "id": "f-config", "from": "cfg", "to": "conftest", "label": "testpaths" },
+    { "id": "f-fake", "from": "conftest", "to": "fake", "label": "fake_redis" },
+    { "id": "f-tmp", "from": "conftest", "to": "tmp", "label": "work_dir" },
+    { "id": "f-inject-fake", "from": "fake", "to": "call", "label": "注入" },
+    { "id": "f-inject-tmp", "from": "tmp", "to": "call", "label": "注入" },
+    { "id": "f-run", "from": "call", "to": "verdict", "label": "返回值 / 异常", "labelDy": -30 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "收集与装配",
+      "items": [
+        "testpaths 锁定 tests/，asyncio_mode=auto 让 async 测试直接跑",
+        "conftest 按参数名提供替身，用例不需要 import"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "执行与判定",
+      "items": [
+        "每个用例拿到自己的替身实例，互不共享",
+        "assert 与 pytest.raises 决定通过还是失败"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "清理（图中省略）",
+      "items": [
+        "fixture 里 yield 之后的代码负责收尾",
+        "关闭文件 handler、删除 .tmp 子目录、恢复日志级别"
+      ]
+    }
+  ]
+}

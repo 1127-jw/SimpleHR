@@ -1,6 +1,4 @@
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.models.candidate import ResumeModel
 from app.schemas.candidate_schema import TaskInfoSchema
 from app.schemas.agent_schema import AgentCandidateSchema
 from utils.ocr_service import PaddleOcr

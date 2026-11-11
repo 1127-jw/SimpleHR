@@ -275,8 +275,12 @@ async def get_7d_candidate(
     async with session.begin():
         candidate_repo = CandidateRepo(session)
         now = now_beijing()
-        end_time = datetime(year=now.year, month=now.month, day=now.day)
-        start_time = end_time - timedelta(days=6)
+        # 起始：6 天前的 00:00（naive 北京时间，与库中 created_at 的存储方式一致）
+        start_time = datetime(year=now.year, month=now.month, day=now.day) - timedelta(days=6)
+        # 结束：当前时间。
+        # 注意：不要用「今天 00:00」当结束时间，否则 `created_at <= end_time` 会把
+        # 当天 00:00 之后新增的候选人全部排除，「近 7 天」图表当天那一桶永远是 0。
+        end_time = now.replace(tzinfo=None)
         rows = await candidate_repo.candidate_count(
             start_time=start_time,
             end_time=end_time,

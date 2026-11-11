@@ -385,13 +385,12 @@
             button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在跳转...';
             button.disabled = true;
 
-            // 模拟跳转延迟
+            // 前端地址（由后端注入，为空则回退到当前域名根路径）
+            const frontendUrl = "{{ frontend_url }}".replace(/\/$/, '') || window.location.origin;
+
             setTimeout(() => {
-                alert('正在跳转到工作台...\n（在实际应用中，这里会重定向到您的主应用页面）');
-                // 实际应用中使用: window.location.href = '/dashboard';
-                button.innerHTML = originalText;
-                button.disabled = false;
-            }, 1500);
+                window.location.href = frontendUrl + '/';
+            }, 800);
         }
 
         // 添加键盘支持

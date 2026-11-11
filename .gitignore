@@ -4,6 +4,10 @@
 RESUME_PROJECT.md
 CHANGES.md
 
+# 部署文档/复盘（本地版本含真实密钥与环境细节，不入库）
+docs/deployment.md
+docs/deployment-retrospective.md
+
 # Python
 __pycache__/
 *.py[cod]

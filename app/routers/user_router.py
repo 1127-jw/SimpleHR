@@ -201,7 +201,10 @@ async def dingtalk_authorize_success(
     return jinja2Engine.TemplateResponse(
         request,
         "ding_authorize_success.html",
-        {"username": nick}
+        {
+            "username": nick,
+            "frontend_url": settings.FRONTEND_BASE_URL.rstrip("/") if settings.FRONTEND_BASE_URL else "",
+        },
     )
 
 @router.get("/dingtalk/account", summary="获取自己的钉钉账号", response_model=DingdingUserRespSchema)
