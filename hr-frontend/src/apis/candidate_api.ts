@@ -7,12 +7,44 @@ export enum CandidateStatusEnum {
   APPLICATION = '已投递',
   AI_FILTER_FAILED = 'AI筛选失败',
   AI_FILTER_PASSED = 'AI筛选成功',
+  MANUAL_PASSED = '人工通过/重试',
   WAITING_FOR_INTERVIEW = '待面试',
   REFUSED_INTERVIEW = '拒绝面试',
   INTERVIEW_PASSED = '面试通过',
   INTERVIEW_REJECTED = '面试未通过',
   HIRED = '已入职',
   REJECTED = '已拒绝',
+  NEGOTIATION_EXPIRED = '协商超时',
+  PROCESSING_ERROR = '处理异常',
+}
+
+// 允许的状态转移表（与后端保持一致）
+export const ALLOWED_TRANSITIONS: Record<string, string[]> = {
+  [CandidateStatusEnum.APPLICATION]: [
+    CandidateStatusEnum.AI_FILTER_FAILED,
+    CandidateStatusEnum.AI_FILTER_PASSED,
+  ],
+  [CandidateStatusEnum.AI_FILTER_FAILED]: [CandidateStatusEnum.MANUAL_PASSED],
+  [CandidateStatusEnum.AI_FILTER_PASSED]: [CandidateStatusEnum.WAITING_FOR_INTERVIEW],
+  [CandidateStatusEnum.NEGOTIATION_EXPIRED]: [CandidateStatusEnum.MANUAL_PASSED],
+  [CandidateStatusEnum.PROCESSING_ERROR]: [CandidateStatusEnum.MANUAL_PASSED],
+  [CandidateStatusEnum.MANUAL_PASSED]: [CandidateStatusEnum.WAITING_FOR_INTERVIEW],
+  [CandidateStatusEnum.WAITING_FOR_INTERVIEW]: [
+    CandidateStatusEnum.INTERVIEW_PASSED,
+    CandidateStatusEnum.INTERVIEW_REJECTED,
+    CandidateStatusEnum.REFUSED_INTERVIEW,
+  ],
+  [CandidateStatusEnum.INTERVIEW_PASSED]: [
+    CandidateStatusEnum.HIRED,
+    CandidateStatusEnum.REJECTED,
+  ],
+  [CandidateStatusEnum.INTERVIEW_REJECTED]: [
+    CandidateStatusEnum.HIRED,
+    CandidateStatusEnum.REJECTED,
+  ],
+  [CandidateStatusEnum.HIRED]: [],
+  [CandidateStatusEnum.REJECTED]: [],
+  [CandidateStatusEnum.REFUSED_INTERVIEW]: [],
 }
 
 export enum EducationEnum {
@@ -175,4 +207,8 @@ export const updateCandidateStatus = (candidateId: string, data: CandidateStatus
 
 export const getCandidateAiScore = (candidateId: string) => {
   return httpRequest.get<CandidateAIScoreResponse>(`/candidate/ai-score/${candidateId}`)
+}
+
+export const deleteCandidate = (candidateId: string) => {
+  return httpRequest.delete(`/candidate/${candidateId}`)
 }

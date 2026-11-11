@@ -52,6 +52,8 @@
             <el-button link type="primary" @click="openResume(scope.row)">简历</el-button>
             <span class="ml-1"></span>
             <el-button link type="primary" @click="showAIScore(scope.row)">AI评分</el-button>
+            <span class="ml-1"></span>
+            <el-button link type="danger" @click="handleDelete(scope.row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -184,6 +186,15 @@
             placeholder="请输入未通过原因"
           />
         </el-form-item>
+
+        <el-alert
+          v-if="statusForm.status === CandidateStatusEnum.MANUAL_PASSED"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="mb-4"
+          title="系统将重新发送面试邀请邮件，并开始协商面试时间"
+        />
       </el-form>
 
       <template #footer>
@@ -200,15 +211,16 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getCandidates,
   getCandidateAiScore,
   updateCandidateStatus,
   downloadCandidateResume,
+  deleteCandidate,
 } from '@/apis/candidate_api'
 import type { Candidate, CandidateAIScore } from '@/apis/candidate_api'
-import { CandidateStatusEnum } from '@/apis/candidate_api'
+import { CandidateStatusEnum, ALLOWED_TRANSITIONS } from '@/apis/candidate_api'
 import { getPositionList, type Position } from '@/apis/position_api'
 
 const candidates = ref<Candidate[]>([])
@@ -248,24 +260,10 @@ const statusForm = ref<{
   rejection_reason: '',
 })
 
-const statusFlow: string[] = [
-  CandidateStatusEnum.APPLICATION,
-  CandidateStatusEnum.AI_FILTER_FAILED,
-  CandidateStatusEnum.AI_FILTER_PASSED,
-  CandidateStatusEnum.WAITING_FOR_INTERVIEW,
-  CandidateStatusEnum.REFUSED_INTERVIEW,
-  CandidateStatusEnum.INTERVIEW_PASSED,
-  CandidateStatusEnum.INTERVIEW_REJECTED,
-  CandidateStatusEnum.HIRED,
-  CandidateStatusEnum.REJECTED,
-]
-
 const selectableNextStatuses = computed(() => {
   if (!statusCandidate.value) return []
   const current = statusCandidate.value.status as unknown as string
-  const idx = statusFlow.indexOf(current)
-  if (idx < 0) return []
-  return statusFlow.slice(idx + 1)
+  return ALLOWED_TRANSITIONS[current] ?? []
 })
 
 const openStatusDialog = (candidate: Candidate) => {
@@ -297,6 +295,19 @@ const submitStatus = async () => {
   ) {
     ElMessage.error('请输入未通过原因')
     return
+  }
+
+  // 人工通过/重试需要二次确认
+  if (statusForm.value.status === CandidateStatusEnum.MANUAL_PASSED) {
+    try {
+      await ElMessageBox.confirm(
+        '系统将重新发送面试邀请邮件，并开始协商面试时间。是否继续？',
+        '人工通过/重试',
+        { confirmButtonText: '继续', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
   }
 
   try {
@@ -345,6 +356,8 @@ const getStatusTagType = (status: string): string => {
       return 'danger'
     case 'AI筛选成功':
       return 'success'
+    case '人工通过/重试':
+      return 'warning'
     case '待面试':
       return 'warning'
     case '拒绝面试':
@@ -356,6 +369,10 @@ const getStatusTagType = (status: string): string => {
     case '已入职':
       return 'success'
     case '已拒绝':
+      return 'danger'
+    case '协商超时':
+      return 'danger'
+    case '处理异常':
       return 'danger'
     default:
       return 'default'
@@ -373,6 +390,27 @@ const showAIScore = async (candidate: Candidate) => {
     aiScoreDialogVisible.value = true
   } catch (error) {
     ElMessage.error('暂无AI评分！')
+  }
+}
+
+// 删除候选人
+const handleDelete = async (candidate: Candidate) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除候选人「${candidate.name}」吗？此操作将同时删除其 AI 评分和面试记录，且不可恢复。`,
+      '删除确认',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'error' },
+    )
+  } catch {
+    return // 用户取消
+  }
+
+  try {
+    await deleteCandidate(candidate.id)
+    ElMessage.success('候选人已删除')
+    await fetchCandidates()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? '删除失败')
   }
 }
 

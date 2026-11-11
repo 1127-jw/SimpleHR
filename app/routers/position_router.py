@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 from app.models.user import UserModel
 # schema
-from app.schemas.position_schema import PositionCreateSchema, PositionRespSchema, PositionListRespSchema
+from app.schemas.position_schema import PositionCreateSchema, PositionUpdateSchema, PositionRespSchema, PositionListRespSchema
 from app.schemas.response_schema import ResponseSchema
 # repo service
 from app.repository.position_repo import PositionRepo
@@ -51,3 +51,14 @@ async def delete_position(
     except Exception:
         raise
     return ResponseSchema()
+
+
+@router.patch("/{position_id}", summary="更新职位", response_model=PositionRespSchema)
+async def update_position(
+    position_id: str,
+    position_data: PositionUpdateSchema,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[UserModel, Depends(get_current_user)],
+):
+    position = await position_ser.update_position(session, position_id, position_data, current_user)
+    return {"position": position}

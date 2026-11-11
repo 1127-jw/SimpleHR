@@ -19,7 +19,7 @@ class InterviewResultEnum(StrEnum):
 class InterviewModel(BaseModel):
     __tablename__ = "interviews"
 
-    scheduled_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    scheduled_time: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
     feedback: Mapped[Optional[str]] = mapped_column(Text)
     result: Mapped[Optional[InterviewResultEnum]] = mapped_column(
         Enum(InterviewResultEnum, native_enum=False, length=20)

@@ -34,15 +34,15 @@ class UserModel(BaseModel):
     phone_number: Mapped[Optional[str]] = mapped_column(String(20), unique=True, index=True)
     realname: Mapped[str] = mapped_column(String(50), nullable=False)
     avatar: Mapped[Optional[str]] = mapped_column(String(255))
-    department_id: Mapped[Optional[str]] = mapped_column(ForeignKey("departments.id"))
+    department_id: Mapped[Optional[str]] = mapped_column(ForeignKey("departments.id"), index=True)
     status: Mapped[UserStatus] = mapped_column(SEnum(UserStatus), default=UserStatus.ACTIVE)
     is_hr: Mapped[bool] = mapped_column(Boolean, default=False)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # 关联默认懒加载，由仓储层按查询场景显式 selectinload
     department: Mapped[Optional["DepartmentModel"]] = relationship(
         back_populates="members",
         foreign_keys=[department_id],
-        lazy="joined"
     )
     managed_departments: Mapped[List["DepartmentModel"]] = relationship(
         secondary=hr_managed_departments,

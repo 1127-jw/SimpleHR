@@ -43,10 +43,11 @@ class PositionModel(BaseModel):
     work_year: Mapped[int] = mapped_column(Integer, default=0)
     is_open: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    department_id: Mapped[str] = mapped_column(ForeignKey("departments.id"))
-    creator_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    department_id: Mapped[str] = mapped_column(ForeignKey("departments.id"), index=True)
+    creator_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
 
-    department: Mapped["DepartmentModel"] = relationship(lazy="joined")
-    creator: Mapped["UserModel"] = relationship(lazy="joined")
+    # 关联默认懒加载，由仓储层按查询场景显式 selectinload
+    department: Mapped["DepartmentModel"] = relationship()
+    creator: Mapped["UserModel"] = relationship()
     #候选人信息
     candidates: Mapped[List["CandidateModel"]] = relationship("CandidateModel", back_populates="position")

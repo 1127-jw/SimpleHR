@@ -105,27 +105,29 @@ async def run_candidate_agent(
     else:
         # 图模式：使用 LangGraph 状态图
         try:
-            async with get_checkpointer() as checkpointer:
-                # 启动新流程前清除旧的 checkpoint，避免重放历史错误状态
-                # 注意：notify.py 中通过 Command(resume=...) 恢复流程时不受影响
-                await checkpointer.adelete_thread(candidate.email)
+            # 检查点存储是进程级单例，直接取用（不再每次新建连接）
+            checkpointer = get_checkpointer()
 
-                candidate_graph = build_candidate_graph(
-                    checkpointer,
-                    score_pass_threshold=score_pass_threshold,
-                    max_negotiation_rounds=max_negotiation_rounds,
-                )
-                res = await candidate_graph.ainvoke(
-                    {
-                        "candidate": candidate,
-                        "position": position,
-                        "interviewer": interviewer,
-                        "current_stage": "screening",
-                        "score_pass_threshold": score_pass_threshold or settings.SCORE_PASS_THRESHOLD,
-                        "max_negotiation_rounds": max_negotiation_rounds or settings.MAX_NEGOTIATION_ROUNDS,
-                    },
-                    config={"configurable": {"thread_id": candidate.email}},
-                )
+            # 启动新流程前清除旧的 checkpoint，避免重放历史错误状态
+            # 注意：notify.py 中通过 Command(resume=...) 恢复流程时不受影响
+            await checkpointer.adelete_thread(candidate.email)
+
+            candidate_graph = build_candidate_graph(
+                checkpointer,
+                score_pass_threshold=score_pass_threshold,
+                max_negotiation_rounds=max_negotiation_rounds,
+            )
+            res = await candidate_graph.ainvoke(
+                {
+                    "candidate": candidate,
+                    "position": position,
+                    "interviewer": interviewer,
+                    "current_stage": "screening",
+                    "score_pass_threshold": score_pass_threshold or settings.SCORE_PASS_THRESHOLD,
+                    "max_negotiation_rounds": max_negotiation_rounds or settings.MAX_NEGOTIATION_ROUNDS,
+                },
+                config={"configurable": {"thread_id": candidate.email}},
+            )
 
             # 检查最终状态是否有错误
             final_stage = res.get("current_stage")

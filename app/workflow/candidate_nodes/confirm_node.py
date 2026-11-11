@@ -39,18 +39,36 @@ async def confirm_node(state: CandidateRecruitmentState) -> dict:
     # 统一使用 to_naive_beijing 剥离时区（确保存入 DB 的是北京时间数值）
     interview_datetime_without_tz = to_naive_beijing(interview_datetime)
 
-    # 1. 创建面试预约记录 + 更新候选人状态
+    # 1. 创建或更新面试预约记录 + 更新候选人状态
     try:
         async with AsyncSessionFactory() as session:
             async with session.begin():
                 interview_repo = InterviewRepo(session)
-                await interview_repo.create_interview({
-                    "scheduled_time": interview_datetime_without_tz,
-                    "result": InterviewResultEnum.PENDING,
-                    "candidate_id": cid,
-                    "interviewer_id": interviewer.id,
-                })
                 candidate_repo = CandidateRepo(session)
+
+                # 检查是否已存在面试记录（candidate_id 有唯一约束）
+                existing_interview = await interview_repo.get_by_candidate_id(cid)
+                if existing_interview:
+                    # 已存在 → 更新面试时间（人工重试场景）
+                    await interview_repo.update_interview(
+                        interview_id=existing_interview.id,
+                        interview_dict={
+                            "scheduled_time": interview_datetime_without_tz,
+                            "result": InterviewResultEnum.PENDING,
+                            "interviewer_id": interviewer.id,
+                        },
+                    )
+                    logger.info("[confirm] interview record updated | candidate_id=%s", cid)
+                else:
+                    # 不存在 → 创建新记录
+                    await interview_repo.create_interview({
+                        "scheduled_time": interview_datetime_without_tz,
+                        "result": InterviewResultEnum.PENDING,
+                        "candidate_id": cid,
+                        "interviewer_id": interviewer.id,
+                    })
+                    logger.info("[confirm] interview record created | candidate_id=%s", cid)
+
                 await candidate_repo.update_candidate_status(
                     candidate_id=cid,
                     status=CandidateStatusEnum.WAITING_FOR_INTERVIEW,

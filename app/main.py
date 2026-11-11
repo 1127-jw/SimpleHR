@@ -1,6 +1,8 @@
 import os
 import sys
 import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
 
 from utils.emailbot.mail_manager import MailManager
 
@@ -22,18 +24,48 @@ from app.routers.user_router import router as user_router
 from app.routers.position_router import router as position_router
 from app.routers.candidate_router import router as candidate_router
 
-from contextlib import asynccontextmanager
 from app.core.redis_client import init_redis, close_redis
 from app.core.http_client import close_http_client
 
+logger = logging.getLogger(__name__)
+
 settings = get_settings()
+
+
+async def _email_reply_timeout_loop() -> None:
+    """后台巡检：把「等待候选人回复」超时的流程推进到协商超时终态。
+
+    常驻任务，间隔 ``EMAIL_REPLY_SWEEP_INTERVAL_MINUTES`` 执行一次。
+    单 worker 部署下没有并发问题；多 worker 时巡检函数内部用 Redis
+    锁保证同一时刻只有一个 worker 执行。
+    """
+    from app.tasks.timeout_tasks import sweep_stale_email_replies
+
+    interval_seconds = settings.EMAIL_REPLY_SWEEP_INTERVAL_MINUTES * 60
+    # 先等待一个周期，避免启动瞬间就压一波数据库查询
+    await asyncio.sleep(interval_seconds)
+
+    while True:
+        try:
+            swept = await sweep_stale_email_replies()
+            if swept:
+                logger.info("邮件回复超时巡检：已推进 %s 个候选人", swept)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("邮件回复超时巡检失败，将在下个周期重试")
+        await asyncio.sleep(interval_seconds)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.core.logging_config import setup_logging, stop_logging
+    from app.core.checkpointer import init_checkpointer, close_checkpointer
+
     setup_logging(level="INFO")
     await init_redis()
+    # 检查点存储是进程级单例：整个进程共用一条连接，setup() 只执行一次
+    await init_checkpointer()
     await MailManager.init(
         imap_host=os.getenv("IMAP_HOST", "imap.163.com"),
         smtp_host=os.getenv("SMTP_HOST", "smtp.163.com"),
@@ -42,11 +74,20 @@ async def lifespan(app: FastAPI):
         password=os.getenv("MAIL_PASSWORD"),
     )
 
+    sweep_task = asyncio.create_task(
+        _email_reply_timeout_loop(), name="email-reply-timeout-sweep"
+    )
+
     yield
+
+    sweep_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await sweep_task
 
     await MailManager.close()
     await close_redis()
     await close_http_client()
+    await close_checkpointer()
     stop_logging()
 
 

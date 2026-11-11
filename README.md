@@ -215,6 +215,15 @@ AM_WINDOW_END_HOUR=12
 PM_WINDOW_START_HOUR=14
 PM_WINDOW_END_HOUR=18
 
+# 等待候选人回复邮件的超时时间（小时），超时后自动流转到「协商超时」
+EMAIL_REPLY_TIMEOUT_HOURS=48
+# 超时巡检间隔（分钟）
+EMAIL_REPLY_SWEEP_INTERVAL_MINUTES=15
+
+# 登录限流（次/60 秒）
+LOGIN_RATE_LIMIT_PER_IP=20
+LOGIN_RATE_LIMIT_PER_EMAIL=5
+
 # 工作流开关：True=LangGraph 状态图，False=旧 Agent 模式
 GRAPH_OPEN=True
 
@@ -355,6 +364,9 @@ AI 评分通过 → 发邀请邮件（附建议时间）
 | 协商轮次上限 | `MAX_NEGOTIATION_ROUNDS` | 3 | 超过则流转到 `negotiation_expired` |
 | 上午面试窗口 | `AM_WINDOW_START_HOUR` / `AM_WINDOW_END_HOUR` | 9 / 12 | 用于校验「上午」类模糊时间 |
 | 下午面试窗口 | `PM_WINDOW_START_HOUR` / `PM_WINDOW_END_HOUR` | 14 / 18 | 用于校验「下午」类模糊时间 |
+| 邮件回复超时 | `EMAIL_REPLY_TIMEOUT_HOURS` | 48 | 等待候选人回复超过该时长 → 自动流转「协商超时」 |
+| 超时巡检间隔 | `EMAIL_REPLY_SWEEP_INTERVAL_MINUTES` | 15 | 后台巡检任务的执行周期 |
+| 登录限流（IP / 账号） | `LOGIN_RATE_LIMIT_PER_IP` / `LOGIN_RATE_LIMIT_PER_EMAIL` | 20 / 5 | 60 秒滑动窗口内的尝试上限 |
 | 工作流开关 | `GRAPH_OPEN` | False | `True` 启用 LangGraph 状态图 |
 | 节点日志 logger 名 | `NODE_LOGGER_NAME` | `workflow.nodes` | 决定哪些记录写入 `logs/nodes.log` |
 | Access Token 有效期 | `ACCESS_EXPIRE_MINUTES` | 30 | 分钟 |

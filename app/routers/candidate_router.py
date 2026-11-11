@@ -9,7 +9,7 @@ from typing import Annotated, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import audit
 from app.core.db import get_db
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, get_hr_or_superuser
 from app.core.config import get_settings
 from app.models.user import UserModel
 from uuid import uuid4
@@ -19,6 +19,7 @@ from utils.time_ISO8601_datatime import now_beijing
 from app.schemas.candidate_schema import ResumeUploadRespSchema, ResumePaseSchema, ResumeParseTaskRespSchema, \
     TaskInfoSchema,CandidateCreateSchema
 from app.service.candidate_ser import resume_upload_service, parse_resume_service, create_candidate_ser
+from app.service.candidate_status_ser import validate_transition, trigger_manual_retry, MANUAL_RETRY_SOURCES
 
 from redis.asyncio import Redis
 from app.core.redis_client import get_redis
@@ -98,7 +99,7 @@ async def create_candidate(
 async def get_candidate_list(
     session:Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1, description="页码，从 1 开始"),
-    size: int = Query(10, ge=1, le=100, description="每页数量，1-100"),
+    size: int = Query(20, ge=1, le=100, description="每页数量，1-100"),
     position_id: str|None = Query(None, description="职位的ID"),
     status: CandidateStatusEnum|None = Query(None, description="候选人状态"),
     current_user: UserModel = Depends(get_current_user),
@@ -184,7 +185,8 @@ async def update_candidate_status(
     session:Annotated[AsyncSession, Depends(get_db)],
     candidate_id: str,
     status_data: CandidateStatusUpdateSchema,
-    current_user: UserModel = Depends(get_current_user),
+    background_tasks: BackgroundTasks,
+    current_user: UserModel = Depends(get_hr_or_superuser),
 ):
     async with session.begin():
         candidate_repo = CandidateRepo(session)
@@ -192,26 +194,12 @@ async def update_candidate_status(
         candidate = await candidate_repo.get_by_id(candidate_id)
         if not candidate:
             raise HTTPException(status_code=404, detail="候选人不存在")
-        # 更改状态，状态只能从前往后流转
-        status_flow = [
-            CandidateStatusEnum.APPLICATION,
-            CandidateStatusEnum.AI_FILTER_FAILED,
-            CandidateStatusEnum.AI_FILTER_PASSED,
-            CandidateStatusEnum.WAITING_FOR_INTERVIEW,
-            CandidateStatusEnum.REFUSED_INTERVIEW,
-            CandidateStatusEnum.INTERVIEW_PASSED,
-            CandidateStatusEnum.INTERVIEW_REJECTED,
-            CandidateStatusEnum.HIRED,
-            CandidateStatusEnum.REJECTED,
-        ]
-        try:
-            current_idx = status_flow.index(candidate.status)
-            target_idx = status_flow.index(status_data.status)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="非法的候选人状态")
 
-        if target_idx <= current_idx:
-            raise HTTPException(status_code=400, detail="候选人状态只能往后流转")
+        # 校验状态流转（图状转移表）
+        try:
+            validate_transition(candidate.status, status_data.status)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
         if status_data.status == CandidateStatusEnum.WAITING_FOR_INTERVIEW:
             if not status_data.interview_time:
@@ -249,7 +237,12 @@ async def update_candidate_status(
 
         # 更新候选人状态
         await candidate_repo.update_candidate_status(candidate_id=candidate_id, status=status_data.status)
-        return ResponseSchema()
+
+    # 人工通过/重试：异步触发工作流重启（跳转到 email_invite 节点）
+    if status_data.status == CandidateStatusEnum.MANUAL_PASSED:
+        background_tasks.add_task(trigger_manual_retry, candidate_id)
+
+    return ResponseSchema()
 
 
 
@@ -294,3 +287,27 @@ async def get_7d_candidate(
                 "count": day_counts.get(day_x, 0),
             })
         return result
+
+
+@router.delete("/{candidate_id}", summary="删除候选人", response_model=ResponseSchema)
+async def delete_candidate(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    candidate_id: str,
+    current_user: UserModel = Depends(get_hr_or_superuser),
+):
+    """删除候选人及其关联数据（AI 评分、面试记录）。
+
+    权限：HR 或超级管理员。
+    """
+    async with session.begin():
+        candidate_repo = CandidateRepo(session)
+        deleted = await candidate_repo.delete_candidate(candidate_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="候选人不存在")
+
+    audit(
+        "candidate.delete",
+        user_id=current_user.id,
+        target=f"candidate:{candidate_id}",
+    )
+    return ResponseSchema()

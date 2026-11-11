@@ -25,7 +25,7 @@ class UserSH(BaseModel):
     phone_number: str | None = Field(None, description="Phone number")
     email: EmailStr = Field(..., description="Email address")
     avatar: str | None = Field(None, description="Avatar")
-    department: DepartmentSH = Field(...,description="Department")
+    department: DepartmentSH | None = Field(None, description="Department")
     status: UserStatus = Field(...,description="Status")
     is_superuser: bool = Field(...,description="Superuser")
     is_hr: bool = Field(...,description="HR")

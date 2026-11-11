@@ -39,6 +39,19 @@ export interface PositionCreateData {
   is_open?: boolean
 }
 
+export interface PositionUpdateData {
+  title?: string
+  description?: string | null
+  requirements?: string
+  min_salary?: number
+  max_salary?: number
+  deadline?: string | null
+  recruitment_count?: number
+  education?: EducationEnum
+  work_year?: number
+  is_open?: boolean
+}
+
 export interface GetPositionListParams {
   page?: number
   size?: number
@@ -78,4 +91,8 @@ export const getPositionList = (params: GetPositionListParams) => {
  */
 export const deletePosition = (position_id: string) => {
   return httpRequest.delete(`/position/delete/${position_id}`)
+}
+
+export const updatePosition = (position_id: string, data: PositionUpdateData) => {
+  return httpRequest.patch(`/position/${position_id}`, data)
 }

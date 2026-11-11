@@ -93,6 +93,7 @@
       <el-table-column prop="created_at" label="创建时间" />
       <el-table-column label="操作" width="180">
         <template #default="{ row }">
+          <el-button type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
           <el-popconfirm
             title="确定删除这个职位吗?"
             @confirm="handleDelete(row.id)"
@@ -185,8 +186,10 @@ import {
   createPosition,
   getPositionList,
   deletePosition,
+  updatePosition,
   type Position,
   type PositionCreateData,
+  type PositionUpdateData,
   EducationEnum,
 } from '@/apis/position_api'
 
@@ -255,14 +258,53 @@ const handleAdd = () => {
   dialog.visible = true
 }
 
+const handleEdit = (row: Position) => {
+  // 填充表单
+  Object.assign(positionForm, {
+    title: row.title,
+    description: row.description,
+    requirements: row.requirements,
+    min_salary: row.min_salary,
+    max_salary: row.max_salary,
+    deadline: row.deadline,
+    recruitment_count: row.recruitment_count,
+    education: row.education,
+    work_year: row.work_year,
+    is_open: row.is_open,
+  })
+  isEditMode.value = true
+  editingPositionId.value = row.id
+  dialog.title = '编辑职位'
+  dialog.visible = true
+}
+
 const handleSubmit = async () => {
   try {
-    await createPosition(positionForm as PositionCreateData)
-    ElMessage.success('职位创建成功')
+    if (isEditMode.value && editingPositionId.value) {
+      // 编辑模式：只提交修改过的字段
+      const updateData: PositionUpdateData = {
+        title: positionForm.title,
+        description: positionForm.description,
+        requirements: positionForm.requirements,
+        min_salary: positionForm.min_salary,
+        max_salary: positionForm.max_salary,
+        deadline: positionForm.deadline,
+        recruitment_count: positionForm.recruitment_count,
+        education: positionForm.education,
+        work_year: positionForm.work_year,
+        is_open: positionForm.is_open,
+      }
+      await updatePosition(editingPositionId.value, updateData)
+      ElMessage.success('职位更新成功')
+    } else {
+      // 添加模式
+      await createPosition(positionForm as PositionCreateData)
+      ElMessage.success('职位创建成功')
+    }
     dialog.visible = false
-    await fetchPositions() // Refresh list
+    await fetchPositions()
   } catch (error) {
-    ElMessage.error('职位创建失败')
+    ElMessage.error(isEditMode.value ? '职位更新失败' : '职位创建失败')
     console.error(error)
   }
 }
@@ -271,7 +313,7 @@ const handleDelete = async (id: string) => {
   try {
     await deletePosition(id)
     ElMessage.success('职位删除成功')
-    await fetchPositions() // Refresh list
+    await fetchPositions()
   } catch (error) {
     ElMessage.error('职位删除失败')
     console.error(error)

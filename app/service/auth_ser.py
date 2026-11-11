@@ -17,12 +17,12 @@ async def authenticate_user(
         user_repo = UserRepo(session)
         user :Optional[UserModel] = await user_repo.get_by_email(useremail)
         # 2 验证user
-        if not user:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST ,detail="no such user")
-        if not user.check_password(password):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST ,detail="wrong password")
+        # 统一错误信息：区分「用户不存在」与「密码错误」会变成账号枚举入口。
+        # 保持 400 是为了兼容前端 axios 拦截器（401 会触发自动刷新令牌流程）。
+        if user is None or not user.check_password(password):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱或密码错误")
         if user.status != UserStatus.ACTIVE:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST ,detail="inactive user")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="账号已被禁用，请联系管理员")
 
         return user
 

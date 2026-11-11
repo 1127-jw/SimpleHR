@@ -2,14 +2,31 @@ import logging
 from datetime import datetime
 
 from app.core.config import get_settings
+from app.core.db import AsyncSessionFactory
 from app.core.exceptions import DingTalkServiceError, EmailSendError
+from app.repository.resume_repo import CandidateRepo
 from app.service.dingtalk_ser import get_user_available_slots
 from app.workflow.candidate_state import CandidateRecruitmentState
 from app.workflow.error_handler import node_error_wrapper
-from utils.time_ISO8601_datatime import now_beijing
+from utils.time_ISO8601_datatime import now_beijing, to_naive_beijing
 
 settings = get_settings()
 logger = logging.getLogger(settings.NODE_LOGGER_NAME)
+
+
+async def _mark_invite_sent(candidate_id: str) -> None:
+    """记录邀请邮件发送时间。
+
+    该时间戳是「等待候选人回复」超时巡检的判据：只有确实停在
+    ``get_candidate_email_reply`` 中断点、且超过 ``EMAIL_REPLY_TIMEOUT_HOURS``
+    的候选人才会被推进到「协商超时」。
+    """
+    async with AsyncSessionFactory() as session:
+        async with session.begin():
+            await CandidateRepo(session).update_email_invite_sent_at(
+                candidate_id=candidate_id,
+                sent_at=to_naive_beijing(now_beijing()),
+            )
 
 
 async def send_interview_email(email: str, body: str) -> None:
@@ -75,6 +92,13 @@ async def email_invite_node(state: CandidateRecruitmentState) -> dict:
 """
         await send_interview_email(candidate.email, body=body)
         logger.info("[email_invite] no-slot notice sent | candidate_id=%s", cid)
+        # 无空闲时间同样进入协商等待，记录发送时间供超时巡检使用
+        try:
+            await _mark_invite_sent(cid)
+        except Exception as e:
+            logger.error(
+                "[email_invite] mark invite sent failed | candidate_id=%s | error=%s", cid, e
+            )
         return {
             "email_sent": True,
             "email_sent_at": None,
@@ -102,6 +126,14 @@ async def email_invite_node(state: CandidateRecruitmentState) -> dict:
     await send_interview_email(candidate.email, body=body)
 
     logger.info("[email_invite] invite sent | candidate_id=%s", cid)
+
+    # 记录发送时间：这是「等待候选人回复」超时巡检的起点
+    try:
+        await _mark_invite_sent(cid)
+    except Exception as e:
+        logger.error(
+            "[email_invite] mark invite sent failed | candidate_id=%s | error=%s", cid, e
+        )
 
     return {
         "email_sent": True,

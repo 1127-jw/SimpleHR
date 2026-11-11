@@ -110,6 +110,25 @@ class Settings(BaseSettings):
     MAX_NEGOTIATION_ROUNDS: int = Field(default=3, description="面试时间协商轮次上限")
     EMAIL_REPLY_TIMEOUT: str = Field(default="TIMEOUT", description="interrupt 超时恢复标记")
 
+    # 等待候选人回复邮件的超时时间（小时）。
+    # 超过该时长仍停留在「等待回复」中断点的候选人，由超时巡检任务
+    # 以 EMAIL_REPLY_TIMEOUT 恢复状态图，流转到「协商超时」终态。
+    EMAIL_REPLY_TIMEOUT_HOURS: int = Field(
+        default=48, ge=1, description="等待候选人回复邮件的超时时间（小时）"
+    )
+    # 超时巡检的执行间隔（分钟）
+    EMAIL_REPLY_SWEEP_INTERVAL_MINUTES: int = Field(
+        default=15, ge=1, description="邮件回复超时巡检间隔（分钟）"
+    )
+
+    # ---------- 登录限流（滑动窗口，单位：次/60 秒） ----------
+    LOGIN_RATE_LIMIT_PER_IP: int = Field(
+        default=20, ge=1, description="单 IP 登录尝试上限（60 秒窗口）"
+    )
+    LOGIN_RATE_LIMIT_PER_EMAIL: int = Field(
+        default=5, ge=1, description="单账号登录尝试上限（60 秒窗口）"
+    )
+
     # ---------- 面试时间窗口（24小时制） ----------
     AM_WINDOW_START_HOUR: int = Field(default=9, description="上午面试窗口开始")
     AM_WINDOW_END_HOUR: int = Field(default=12, description="上午面试窗口结束")

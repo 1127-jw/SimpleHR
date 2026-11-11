@@ -4,19 +4,49 @@ from datetime import datetime
 from app.models.position import PositionModel
 from . import BaseRepo
 from app.models.candidate import ResumeModel, CandidateModel
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete
 from app.models.candidate import CandidateAIScoreModel
 from sqlalchemy.orm import selectinload
 from app.models.candidate import CandidateStatusEnum
 from app.models.user import UserModel
 from sqlalchemy import func, and_
+from app.models.InterviewModel import InterviewModel
+
+
+def candidate_eager_options():
+    """候选人详情 / 列表所需的关联预加载。
+
+    历史实现给 ``CandidateModel`` 的关系统一加了 ``lazy="joined"``，
+    结果是任何查询（哪怕只需要 name）都会强制 JOIN position / resume /
+    creator 三张表。这里改为按查询场景显式 ``selectinload``：
+
+    - ``selectinload`` 走额外一条 IN 查询，避免 joined-eager 的行膨胀
+    - 层级按需展开到 ``UserSH`` / ``PositionSchema`` 真正需要的深度
+    """
+    return (
+        selectinload(CandidateModel.position)
+        .selectinload(PositionModel.creator)
+        .selectinload(UserModel.department),
+        selectinload(CandidateModel.position).selectinload(PositionModel.department),
+        selectinload(CandidateModel.resume),
+        selectinload(CandidateModel.creator).selectinload(UserModel.department),
+    )
 
 
 class ResumeRepo(BaseRepo):
     async def create_resume(self, file_path: str, uploader_id: str) -> ResumeModel:
         resume = ResumeModel(file_path=file_path, uploader_id=uploader_id)
         self.session.add(resume)
-        return resume
+        await self.session.flush()
+        # 重新查询以带上响应所需的关联（ResumeSchema.uploader → UserSH.department）
+        return cast(
+            ResumeModel,
+            await self.session.scalar(
+                select(ResumeModel)
+                .where(ResumeModel.id == resume.id)
+                .options(selectinload(ResumeModel.uploader).selectinload(UserModel.department))
+            ),
+        )
 
     async def get_by_id(self, resume_id: str) -> ResumeModel:
         stmt = select(ResumeModel).where(ResumeModel.id == resume_id)
@@ -40,8 +70,36 @@ class CandidateRepo(BaseRepo):
         # .refresh 数据库 → 内存 重新查一次数据库，覆盖对象当前属性
         # .commit 内存 → 数据库并持久化	提交事务，使变更真正生效
         await self.session.flush([candidate])
-        await self.session.refresh(candidate, ['position', 'resume'])
-        return candidate
+        # 重新查询以带上 CandidateSchema 所需的全部关联
+        return cast(CandidateModel, await self.get_by_id(candidate.id))
+
+    async def delete_candidate(self, candidate_id: str) -> bool:
+        """删除候选人及其关联数据（AI 评分、面试记录）。
+
+        Returns:
+            True 表示删除成功，False 表示候选人不存在。
+        """
+        candidate = await self.get_by_id(candidate_id)
+        if candidate is None:
+            return False
+
+        # 删除关联的 AI 评分
+        await self.session.execute(
+            delete(CandidateAIScoreModel).where(
+                CandidateAIScoreModel.candidate_id == candidate_id
+            )
+        )
+
+        # 删除关联的面试记录
+        await self.session.execute(
+            delete(InterviewModel).where(
+                InterviewModel.candidate_id == candidate_id
+            )
+        )
+
+        # 删除候选人
+        await self.session.delete(candidate)
+        return True
 
     async def update_candidate_status(self, candidate_id: str, status: CandidateStatusEnum):
         stmt = update(CandidateModel).where(CandidateModel.id==candidate_id).values(status=status)
@@ -51,26 +109,27 @@ class CandidateRepo(BaseRepo):
         stmt = update(CandidateModel).where(CandidateModel.id==candidate_id).values(error_message=error_message)
         await self.session.execute(stmt)
 
+    async def update_email_invite_sent_at(self, candidate_id: str, sent_at: datetime):
+        """记录面试邀请邮件的发送时间，供「等待回复」超时巡检使用。"""
+        stmt = (
+            update(CandidateModel)
+            .where(CandidateModel.id == candidate_id)
+            .values(email_invite_sent_at=sent_at)
+        )
+        await self.session.execute(stmt)
+
     async def get_by_id(self, candidate_id: str) -> CandidateModel | None:
         return await self.session.scalar(
             select(CandidateModel)
             .where(CandidateModel.id==candidate_id)
-            .options(
-                selectinload(CandidateModel.position),
-                selectinload(CandidateModel.resume),
-                selectinload(CandidateModel.creator)
-            )
+            .options(*candidate_eager_options())
         )
 
     async def get_by_email(self, email: str) -> CandidateModel | None:
         return await self.session.scalar(
             select(CandidateModel)
             .where(CandidateModel.email == email)
-            .options(
-                selectinload(CandidateModel.position),
-                selectinload(CandidateModel.resume),
-                selectinload(CandidateModel.creator)
-            )
+            .options(*candidate_eager_options())
         )
 
     async def _visible_stmt(self, current_user: UserModel):
@@ -121,7 +180,10 @@ class CandidateRepo(BaseRepo):
 
         offset = (page - 1) * size
         rows = await self.session.scalars(
-            stmt.order_by(CandidateModel.created_at.desc()).offset(offset).limit(size)
+            stmt.options(*candidate_eager_options())
+            .order_by(CandidateModel.created_at.desc())
+            .offset(offset)
+            .limit(size)
         )
         return list(rows), total
 
@@ -134,6 +196,27 @@ class CandidateRepo(BaseRepo):
             selectinload(CandidateModel.resume)
         )
         return await self.session.scalar(stmt)
+
+    async def list_stale_email_waiters(self, cutoff: datetime, limit: int = 200) -> list[CandidateModel]:
+        """查询「等待候选人回复」已超过 ``cutoff`` 的候选人。
+
+        用于邮件回复超时巡检：这些候选人的状态图正停在
+        ``get_candidate_email_reply_node`` 的 interrupt 上。
+        """
+        stmt = (
+            select(CandidateModel)
+            .where(
+                CandidateModel.status.in_([
+                    CandidateStatusEnum.AI_FILTER_PASSED,
+                    CandidateStatusEnum.MANUAL_PASSED,
+                ]),
+                CandidateModel.email_invite_sent_at.is_not(None),
+                CandidateModel.email_invite_sent_at <= cutoff,
+            )
+            .order_by(CandidateModel.email_invite_sent_at.asc())
+            .limit(limit)
+        )
+        return list(await self.session.scalars(stmt))
 
     async def candidate_count(self, start_time: datetime, end_time: datetime):
         stmt = select(
@@ -160,8 +243,4 @@ class CandidateAIScoreRepo(BaseRepo):
         return candidate_score
 
     async def get_by_candidate_id(self, candidate_id: str):
-        return await self.session.scalar(select(CandidateAIScoreModel).where(CandidateAIScoreModel.candidate_id==candidate_id).options(selectinload(CandidateAIScoreModel.candidate)))
-
-    async def update_candidate_status(self, candidate_id: str, status: CandidateStatusEnum):
-        candidate_score = self.get_by_candidate_id(candidate_id)
-        candidate_score.status = status
+        return await self.session.scalar(select(CandidateAIScoreModel).where(CandidateAIScoreModel.candidate_id==candidate_id))

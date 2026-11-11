@@ -47,6 +47,19 @@ class FakeRedis:
                 removed += 1
         return removed
 
+    async def eval(self, script: str, numkeys: int, *keys_and_args: Any) -> Any:
+        """仅支持 app.core.auth 的「原子消费」脚本：GET + DEL。
+
+        真实 Redis 会在服务端原子执行这段 Lua；测试替身用同步 dict 操作
+        模拟同样的语义（单线程 asyncio 下等价于原子）。
+        """
+        key = keys_and_args[0]
+        value = self.store.get(key)
+        if value is not None:
+            del self.store[key]
+            return value
+        return None
+
 
 @pytest.fixture
 def fake_redis() -> FakeRedis:

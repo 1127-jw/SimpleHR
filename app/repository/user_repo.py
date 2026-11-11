@@ -4,6 +4,19 @@ from typing import List, Sequence
 from sqlalchemy.orm import selectinload
 from app.models.user import UserModel, DepartmentModel, DingdingUserModel
 
+def user_eager_options():
+    """用户响应（``UserSH``）所需的关联预加载。
+
+    ``UserSH`` 需要 ``department``，而 ``PositionRepo`` 还需要
+    ``managed_departments`` 做部门可见性过滤，因此认证链路上的用户查询
+    统一在此展开（顺带避免异步环境下的懒加载 ``MissingGreenlet``）。
+    """
+    return (
+        selectinload(UserModel.department),
+        selectinload(UserModel.managed_departments),
+    )
+
+
 class UserRepo(BaseRepo):
     async def create_user(self, user_data: dict) -> UserModel:
         user = UserModel(**user_data)
@@ -11,12 +24,20 @@ class UserRepo(BaseRepo):
         return user
 
     async def get_by_id(self, user_id: str) -> UserModel | None:
-        stmt = select(UserModel).where(UserModel.id == user_id)
+        stmt = (
+            select(UserModel)
+            .where(UserModel.id == user_id)
+            .options(*user_eager_options())
+        )
         user = await self.session.scalar(stmt)
         return user
 
     async def get_by_email(self, email: str) -> UserModel | None:
-        stmt = select(UserModel).where(UserModel.email == email)
+        stmt = (
+            select(UserModel)
+            .where(UserModel.email == email)
+            .options(*user_eager_options())
+        )
         user = await self.session.scalar(stmt)
         return user
 
@@ -41,7 +62,9 @@ class UserRepo(BaseRepo):
         ) or 0
 
         offset = (page - 1) * size
-        users = await self.session.scalars(stmt.offset(offset).limit(size))
+        users = await self.session.scalars(
+            stmt.options(selectinload(UserModel.department)).offset(offset).limit(size)
+        )
         return list(users.all()), total
 
     async def set_dingding_user(self, user_id: str, dingding_user_data: dict) -> DingdingUserModel:
@@ -76,7 +99,14 @@ class UserRepo(BaseRepo):
         hr.managed_departments = departments
 
     async def get_hr_list(self):
-        stmt = select(UserModel).where(UserModel.is_hr == True).options(selectinload(UserModel.managed_departments))
+        stmt = (
+            select(UserModel)
+            .where(UserModel.is_hr == True)
+            .options(
+                selectinload(UserModel.department),
+                selectinload(UserModel.managed_departments),
+            )
+        )
         hrs = await self.session.scalars(stmt)
         return hrs.all()
 

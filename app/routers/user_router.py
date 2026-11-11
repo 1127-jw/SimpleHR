@@ -14,7 +14,7 @@ from app.core import rate_limit
 from app.core.audit import audit
 from app.schemas.user_schema import UserLoginReqSH, UserLoginResSH, RefreshRequest, LogoutRequest, UserInviteSchema, \
     UserRegisterReqSchema, UserRegisterResSchema, UserListResponseSchema, UserStatusUpdateSchema, \
-    DepartmentListRespSchema, DingdingUserRespSchema, AssignDepartmentSchema, HrListRespSchema
+    DepartmentListRespSchema, DingdingUserRespSchema, AssignDepartmentSchema, HrListRespSchema, UserSH, HrSchema
 from app.schemas.response_schema import ResponseSchema
 from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user, get_super_user
 from app.service import auth_ser
@@ -38,15 +38,31 @@ async def login(
     session:Annotated[AsyncSession, Depends(get_db)],
     r: Redis = Depends(get_redis),
 ):
-    """登录。同一 IP + 账号每分钟最多 5 次尝试（滑动窗口）。"""
+    """登录。双维度滑动窗口限流（60 秒窗口）：
+
+    - 单 IP：``LOGIN_RATE_LIMIT_PER_IP`` 次 —— 防止同机脚本枚举 / 爆破多个账号
+    - 单账号：``LOGIN_RATE_LIMIT_PER_EMAIL`` 次 —— 防止针对同一账号的定向爆破
+
+    两个维度独立计数、同时生效，任一超限即返回 429。
+    认证失败不区分「用户不存在」与「密码错误」，避免账号枚举。
+    """
     client_ip = request.client.host if request.client else "unknown"
 
+    # 维度 1：单 IP
     await rate_limit.enforce(
         r,
-        f"rl:login:{client_ip}:{login_data.email}",
-        limit=5,
+        f"rl:login:ip:{client_ip}",
+        limit=settings.LOGIN_RATE_LIMIT_PER_IP,
         window=60,
         detail="登录尝试过于频繁，请 1 分钟后再试",
+    )
+    # 维度 2：单账号
+    await rate_limit.enforce(
+        r,
+        f"rl:login:email:{login_data.email}",
+        limit=settings.LOGIN_RATE_LIMIT_PER_EMAIL,
+        window=60,
+        detail="该账号登录尝试过于频繁，请 1 分钟后再试",
     )
 
     try:
@@ -62,7 +78,7 @@ async def login(
         "access_token": tokens["access_token"],
         "refresh_token": tokens["refresh_token"],
         "token_type": tokens["token_type"],
-        "user": user
+        "user": UserSH.model_validate(user)
     }
 
 @router.post("/refresh")
@@ -85,9 +101,10 @@ async def logout(
     return {"detail": "Logged out"}
 
 
-@router.get("/me")
-async def me(user: dict = Depends(get_current_user)):
-    return user
+@router.get("/me", response_model=UserSH)
+async def me(user: UserModel = Depends(get_current_user)):
+    """获取当前登录用户信息（不含密码哈希）。"""
+    return UserSH.model_validate(user)
 
 @router.post("/invite", summary="邀请用户", response_model=ResponseSchema)
 async def invite_user(
@@ -123,9 +140,11 @@ async def list_users(
         user: UserModel = Depends(get_current_user),
 ):
     users, total = await auth_ser.get_list_users(session, user, page, size)
+    # 转换为 Schema，避免泄露 _password
+    items = [UserSH.model_validate(u) for u in users]
     return {
         "total": total,
-        "items": users,
+        "items": items,
     }
 
 @router.patch("/status/update",summary="修改员工状态", response_model=ResponseSchema)
@@ -240,4 +259,6 @@ async def get_hr_list(
     async with session.begin():
         user_repo = UserRepo(session)
         hrs = await user_repo.get_hr_list()
-        return {"hrs": hrs}
+        # 转换为 Schema，避免泄露 _password
+        items = [HrSchema.model_validate(hr) for hr in hrs]
+        return {"hrs": items}

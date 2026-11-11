@@ -21,6 +21,19 @@ class PositionBaseSchema(BaseModel):
 class PositionCreateSchema(PositionBaseSchema):
     pass
 
+class PositionUpdateSchema(BaseModel):
+    """职位更新 Schema（所有字段可选）。"""
+    title: Optional[str] = Field(None, description="职位标题")
+    description: Optional[str] = Field(None, description="职位描述")
+    requirements: Optional[str] = Field(None, description="职位要求")
+    min_salary: Optional[int] = Field(None, description="职位最低薪资")
+    max_salary: Optional[int] = Field(None, description="职位最高薪资")
+    deadline: Optional[datetime] = Field(None, description="职位招聘截止日期")
+    recruitment_count: Optional[int] = Field(None, description="职位招聘人数")
+    education: Optional[EducationEnum] = Field(None, description="最低学历要求")
+    work_year: Optional[int] = Field(None, description="最低工作年限要求")
+    is_open: Optional[bool] = Field(None, description="是否开放")
+
 class PositionSchema(PositionBaseSchema):
     id: str = Field(..., description="职位ID")
     creator: UserSH = Field(..., description="职位创建者")

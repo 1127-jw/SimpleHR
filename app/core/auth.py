@@ -44,6 +44,24 @@ def _encode(payload: dict, secret: str) -> str:
 def _decode(token: str, secret: str) -> dict:
     return jwt.decode(token, secret, algorithms=[ALGORITHM])
 
+# 原子消费 refresh token：GET + DEL 必须在同一条 Lua 脚本中完成。
+# 若拆成 exists() + delete() 两次往返，并发刷新会同时通过存在性检查，
+# 导致同一 token 被兑换两次（refresh token 轮换失去意义）。
+_CONSUME_REFRESH_LUA = """
+local value = redis.call('GET', KEYS[1])
+if value then
+    redis.call('DEL', KEYS[1])
+    return value
+end
+return nil
+"""
+
+
+async def _consume_refresh_token(r: Redis, jti: str) -> str | None:
+    """原子地取出并删除 ``refresh:{jti}``；不存在时返回 None。"""
+    return await r.eval(_CONSUME_REFRESH_LUA, 1, f"refresh:{jti}")
+
+
 async def create_tokens(user_email: str, r: Redis) -> dict:
     now = datetime.now(timezone.utc)
     access_exp = now + timedelta(minutes=ACCESS_EXPIRE_MINUTES)
@@ -91,10 +109,9 @@ async def refresh_access_token(refresh_token: str, r: Redis) -> dict:
     jti = payload["jti"]
     user_id = payload["sub"]
 
-    if not await r.exists(f"refresh:{jti}"):
+    # 原子消费：只有抢到该 jti 的那一次请求能继续签发新令牌
+    if await _consume_refresh_token(r, jti) is None:
         raise ValueError("Refresh token has been revoked")
-
-    await r.delete(f"refresh:{jti}")
 
     return await create_tokens(user_id, r)
 
@@ -146,3 +163,13 @@ async def get_super_user(
         return current_user
     else:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,detail="权限不足")
+
+
+async def get_hr_or_superuser(
+        current_user: UserModel = Depends(get_current_user),
+):
+    """HR 或超级管理员权限。"""
+    if current_user.is_hr or current_user.is_superuser:
+        return current_user
+    else:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足")

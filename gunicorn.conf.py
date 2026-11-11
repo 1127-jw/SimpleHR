@@ -3,26 +3,32 @@
 用法：
     gunicorn app.main:app -c gunicorn.conf.py
 
-
+配置项（全部可用环境变量覆盖）：
+    GUNICORN_BIND            监听地址，默认 127.0.0.1:8000
+    GUNICORN_WORKERS         worker 数，默认 1（受邮件机器人长连接约束）
+    GUNICORN_ACCESS_LOG      访问日志路径，默认 logs/access.log
+    GUNICORN_ERROR_LOG       错误日志路径，默认 logs/error.log
+    GUNICORN_TIMEOUT         单请求超时（秒），默认 60
 """
-from sqlalchemy.dialects.mysql import limit
+import os
 
 worker_class = "uvicorn_worker.UvicornWorker"
-bind = "127.0.0.1:8000"
+bind = os.getenv("GUNICORN_BIND", "127.0.0.1:8000")
 
 # 受邮件机器人约束，默认单 worker；拆分邮件机器人后可按需调大
-workers = 1
+workers = int(os.getenv("GUNICORN_WORKERS", "1"))
 
 # 不需要 preload：when_ready 会在 master 里 import 日志模块，
 # worker fork 后通过 sys.modules 继承同一份模块状态（含共享队列引用）。
 preload_app = False
 
-timeout = 60
+timeout = int(os.getenv("GUNICORN_TIMEOUT", "60"))
 graceful_timeout = 60
 keepalive = 5
 
-accesslog = "/home/hrsystem/hr-backend/log/access.log"
-errorlog = "/home/hrsystem/hr-backend/log/error.log"
+# 日志路径走环境变量，避免把部署机绝对路径写死在仓库里
+accesslog = os.getenv("GUNICORN_ACCESS_LOG", "logs/access.log")
+errorlog = os.getenv("GUNICORN_ERROR_LOG", "logs/error.log")
 loglevel = "info"
 
 limit_request_line = 4094

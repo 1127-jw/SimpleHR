@@ -72,16 +72,67 @@ async def notify(email: ParsedEmail, rule) -> None:
                 )
                 logger.info("面试时间安排完成: %s", resp)
         else:
-            async with get_checkpointer() as checkpointer:
-                candidate_graph = build_candidate_graph(checkpointer)
-                result = await candidate_graph.ainvoke(
-                    Command(resume=f"候选人回复了以下邮件，请根据回复内容决定下一步操作：\n\n主题：{email.subject}\n\n内容：{email.text}"),
-                    config={"configurable": {"thread_id": email.from_.address}}
-                )
+            candidate_graph = build_candidate_graph(get_checkpointer())
+            await candidate_graph.ainvoke(
+                Command(
+                    resume=f"候选人回复了以下邮件，请根据回复内容决定下一步操作：\n\n主题：{email.subject}\n\n内容：{email.text}",
+                    update={
+                        # 刷新候选人/职位/面试官信息（防止检查点中的旧数据）
+                        "candidate": candidate_schema,
+                        "position": position_schema,
+                        "interviewer": interviewer_schema,
+                    },
+                ),
+                config={"configurable": {"thread_id": email.from_.address}}
+            )
 
 
     else:
-        # TODO 为命中规则时，用便宜模型进行解析，分为简历投递则和询问面试时间或进度，若都不是则为垃圾邮件
-        pass
+        # 兜底：即使规则没命中，只要候选人在等待面试协商，也恢复流程
+        # 候选人回复"确认"等简短内容时，可能不命中"询问面试时间或进度"规则
+        await _handle_candidate_reply(email)
+
+
+async def _handle_candidate_reply(email: ParsedEmail) -> None:
+    """兜底处理：检查候选人是否在等待面试协商，如果是则恢复流程。
+
+    场景：候选人回复"确认"、"好的"、"我明天下午3点方便"等简短内容时，
+    可能不命中"询问面试时间或进度"规则，但流程需要恢复。
+    """
+    # 只处理图模式
+    if not settings.GRAPH_OPEN:
+        return
+
+    # 查找候选人
+    candidate_schema, position_schema, interviewer_schema = await _find_candidate_by_email(email.from_.address)
+    if not candidate_schema:
+        return
+
+    # 只处理等待面试协商的状态
+    if candidate_schema.status not in (
+        CandidateStatusEnum.MANUAL_PASSED,
+        CandidateStatusEnum.AI_FILTER_PASSED,
+    ):
+        return
+
+    logger.info(
+        "[candidate_reply] 兜底恢复: 来自 %s, 状态 %s",
+        email.from_.address, candidate_schema.status,
+    )
+
+    # 恢复流程
+    candidate_graph = build_candidate_graph(get_checkpointer())
+    await candidate_graph.ainvoke(
+        Command(
+            resume=f"候选人回复了以下邮件，请根据回复内容决定下一步操作：\n\n主题：{email.subject}\n\n内容：{email.text}",
+            update={
+                # 刷新候选人/职位/面试官信息（防止检查点中的旧数据）
+                "candidate": candidate_schema,
+                "position": position_schema,
+                "interviewer": interviewer_schema,
+            },
+        ),
+        config={"configurable": {"thread_id": email.from_.address}},
+    )
 
 
