@@ -24,6 +24,18 @@ jobs:
       matrix:
         python-version: ['3.13']
 
+    # 项目在「导入期」就会读取配置：app/core/config.py 的校验器要求
+    # ACCESS_SECRET / REFRESH_SECRET 非空，且 MAIL_USERNAME / MAIL_PASSWORD /
+    # MAIL_FROM 是必填项；CI 环境没有 .env，必须提供占位值，否则 import 直接
+    # ValidationError。这里用占位值即可（测试不需要真实邮箱）。
+    env:
+      MAIL_USERNAME: ci@example.com
+      MAIL_PASSWORD: ci-password
+      MAIL_FROM: ci@example.com
+      ACCESS_SECRET: ci-access-secret-0123456789abcdef0123456789
+      REFRESH_SECRET: ci-refresh-secret-fedcba9876543210fedcba9876543
+      DASHSCOPE_API_KEY: ci-dummy-key
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
