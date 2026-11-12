@@ -12,6 +12,7 @@
 | **人机协作（interrupt / resume）** | `interrupt()` 暂停状态图等待候选人邮件回复，外部调度器拿到回复后 resume 继续执行 |
 | **检查点持久化** | `AsyncPostgresSaver` 将状态图检查点写入 PostgreSQL，服务重启后可从断点恢复 |
 | **分层异常处理** | 自定义异常层级 + `@node_error_wrapper` 装饰器：业务异常流转到 `error` 节点，基础设施异常穿透到外层统一标记 `PROCESSING_ERROR` |
+| **人工通过/重试** | HR/管理员可将 `AI筛选失败`/`协商超时`/`处理异常` 的候选人手动触发重试，通过 `Command(goto="email_invite")` 重启协商流程 |
 | **节点元信息保留** | `@wraps` 确保装饰后的节点名、文档字符串不丢失，日志中仍能正确显示 `scoring_node` 而非 `wrapped` |
 | **防御性错误终结点** | `error_node` 自身也做 try/catch，即使状态更新失败也保证记录 `critical` 日志，不会二次抛异常 |
 | **可配置阈值** | 评分通过阈值、协商轮次上限、面试时间窗口全部通过 `.env` 配置 |
@@ -87,6 +88,15 @@ flowchart TD
         W7 -.->|异常| WE
         WE --> W10
     end
+
+    subgraph Manual["人工干预"]
+        M1[人工通过/重试]
+    end
+
+    W6 -->|HR 干预| M1
+    W9 -->|HR 干预| M1
+    WE -->|HR 干预| M1
+    M1 -->|Command goto email_invite| W3
 
     subgraph Infra["基础设施"]
         DB[(PostgreSQL)]
@@ -289,16 +299,27 @@ Token 生命周期与日志分流。
 | `rejected` / `refused` | DB | 淘汰 / 候选人拒绝，更新状态 |
 | `negotiation_expired` | DB | 超过协商轮次上限，更新状态 |
 | `error` | 错误终结点 | 记录错误日志，更新候选人状态为 `PROCESSING_ERROR` |
+| **人工通过/重试** | HR 干预 | HR 在失败后手动触发，通过 `Command(goto="email_invite")` 重启协商流程 |
 
 ### 候选人状态机
 
 ```
 已投递 → AI筛选失败 / AI筛选成功 → 待面试 → 面试通过 / 面试未通过 → 已入职
-                                    ↓
-                             拒绝面试 / 协商超时 / 处理异常
+            │                         ↑
+            │                         │
+            └──→ 人工通过/重试 ──────┘
+                      ↑
+        协商超时 ──────┤
+                      │
+        处理异常 ──────┘
+
+拒绝面试（终态）
 ```
 
-状态只能**单向流转**，在路由层做严格校验。
+**状态流转规则**：
+- 正常流程：`已投递` → `AI筛选成功` → `待面试` → ...
+- 失败后补救：`AI筛选失败` / `协商超时` / `处理异常` → `人工通过/重试` → `待面试`
+- 人工通过/重试由 HR/管理员触发，重启 `email_invite` 节点
 
 ### 面试时间协商
 

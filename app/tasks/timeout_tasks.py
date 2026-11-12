@@ -1,11 +1,4 @@
 """邮件回复超时兜底巡检。
-
-背景
-----
-招聘状态图在 ``get_candidate_email_reply_node`` 通过 ``interrupt()`` 暂停，
-等待候选人回复邮件。原先只有「协商轮次超限」会流转到协商超时，
-**候选人始终不回信** 没有任何兜底：流程会永久停在 interrupt 上。
-
 本模块提供一个周期性巡检任务：
 
 1. 查询 ``email_invite_sent_at`` 早于 ``now - EMAIL_REPLY_TIMEOUT_HOURS``
@@ -21,8 +14,11 @@
 * 用 Redis ``SET NX`` 做跨 worker 互斥，多进程部署下同一时刻只有一个
   巡检在执行。
 """
+import asyncio
 import logging
+from contextlib import suppress
 from datetime import timedelta
+from typing import Optional
 
 from langgraph.types import Command
 
@@ -119,3 +115,71 @@ async def sweep_stale_email_replies() -> int:
             await r.delete(_SWEEP_LOCK_KEY)
         except Exception:  # noqa: BLE001 - 清理失败不影响主流程
             pass
+
+
+# ============================================================
+# 生命周期管理：init / close
+# ============================================================
+
+class TimeoutSweepManager:
+    """超时巡检任务的生命周期管理器（与 MailManager 风格一致）。
+
+    用法::
+
+        await TimeoutSweepManager.init()    # 启动后台巡检任务
+        ...
+        await TimeoutSweepManager.close()   # 取消并等待任务结束
+
+    巡检只依赖 DB + Redis + checkpointer，不依赖邮件服务，
+    因此不受 MAIL_BOT_ENABLED 控制。
+    """
+
+    _task: Optional[asyncio.Task] = None
+
+    @classmethod
+    async def init(cls) -> None:
+        """启动后台巡检任务（全局只启动一次）。"""
+        if cls._task is not None:
+            logger.warning("超时巡检已初始化，跳过重复 init")
+            return
+
+        cls._task = asyncio.create_task(
+            _sweep_loop(), name="email-reply-timeout-sweep"
+        )
+        logger.info(
+            "邮件回复超时巡检已启动，间隔 %s 分钟",
+            settings.EMAIL_REPLY_SWEEP_INTERVAL_MINUTES,
+        )
+
+    @classmethod
+    async def close(cls) -> None:
+        """取消并等待巡检任务结束。"""
+        if cls._task is None:
+            return
+
+        cls._task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cls._task
+        cls._task = None
+        logger.info("邮件回复超时巡检已停止")
+
+
+async def _sweep_loop() -> None:
+    """周期性执行超时巡检，直到任务被取消。
+
+    先等待一个周期再开始，避免应用启动瞬间就压一波数据库查询；
+    单 worker 下没有并发问题，多 worker 时由 sweep 内部的 Redis 锁互斥。
+    """
+    interval_seconds = settings.EMAIL_REPLY_SWEEP_INTERVAL_MINUTES * 60
+    await asyncio.sleep(interval_seconds)
+
+    while True:
+        try:
+            swept = await sweep_stale_email_replies()
+            if swept:
+                logger.info("邮件回复超时巡检：已推进 %s 个候选人", swept)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("邮件回复超时巡检失败，将在下个周期重试")
+        await asyncio.sleep(interval_seconds)

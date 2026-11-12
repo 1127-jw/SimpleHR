@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     MAIL_FROM_NAME: str = Field(default="SimpleHR", description="发件人显示名称")
     MAIL_STARTTLS: bool = Field(default=False, description="先明文建连，再升级加密")
     MAIL_SSL_TLS: bool = Field(default=True, description="连接一开始就是加密的")
+    # 是否启用邮件机器人（IMAP 长连接 + 定时轮询）。
+    # CI / 本地测试环境没有邮箱服务时，设为 false 可跳过 MailManager 的
+    # 初始化与关闭，避免连不上邮箱导致启动慢或日志报错。
+    MAIL_BOT_ENABLED: bool = Field(default=True, description="是否启用邮件机器人")
 
     # ---------- 邀请码 ----------
     INVITE_EXPIRE_MINUTES: int = Field(default=30, description="邀请码过期时间（分钟）")
@@ -103,7 +107,7 @@ class Settings(BaseSettings):
     DASHSCOPE_API_KEY: str = Field(default="", description="DashScope API Key")
 
     # ---------- agent/graph ----------
-    GRAPH_OPEN: bool = Field(default=False, description="是否开启图模式")
+    GRAPH_OPEN: bool = Field(default=True, description="是否开启图模式")
 
     # ---------- 招聘流程阈值 ----------
     SCORE_PASS_THRESHOLD: int = Field(default=7, description="AI 评分通过阈值（overall_score > 该值视为通过）")

@@ -1,0 +1,160 @@
+name: CI
+
+# 触发条件：master 推送 / 针对 master 的 PR / 手动触发
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# 同一分支有新提交时，取消还没跑完的旧任务
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ==================== 后端 ====================
+  backend:
+    name: 后端测试（Python ${{ matrix.python-version }}）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.13']
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 uv 与 Python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: 安装后端依赖
+        run: uv sync --all-groups
+
+      - name: 校验应用可导入
+        run: uv run python -c "import app.main; print('backend import OK')"
+
+      - name: 运行测试
+        run: uv run python -m pytest
+
+  # ==================== 前端：依赖安装 + 类型检查 + 构建 ====================
+  frontend:
+    name: 前端构建（Node ${{ matrix.node-version }}）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [24]
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: hr-frontend/package-lock.json
+
+      - name: 安装前端依赖
+        working-directory: hr-frontend
+        run: npm ci
+
+      - name: 类型检查 + 构建
+        working-directory: hr-frontend
+        run: npm run build
+        env:
+          # 与生产构建保持一致（同源反代）；不设置也不影响构建
+          VITE_API_BASE_URL: ''
+
+  # ==================== 冒烟测试 ====================
+  # 用 GitHub 的 service containers 起临时数据库/缓存，
+  smoke:
+    name: 冒烟测试
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: hr_system
+          POSTGRES_USER: simplejob
+          POSTGRES_PASSWORD: ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U simplejob -d hr_system"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DB_USERNAME: simplejob
+      DB_PASSWORD: ci-password
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_NAME: hr_system
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: '6379'
+      REDIS_DB: '0'
+      ACCESS_SECRET: ci-access-secret-0123456789abcdef0123456789
+      REFRESH_SECRET: ci-refresh-secret-fedcba9876543210fedcba9876543
+      MAIL_USERNAME: ci@example.com
+      MAIL_PASSWORD: ci-password
+      MAIL_FROM: ci@example.com
+      DASHSCOPE_API_KEY: ci-dummy-key
+      MAIL_BOT_ENABLED: 'false'      # 跳过邮件机器人（CI 没有邮箱服务）
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 uv 与 Python 3.13
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.13'
+          enable-cache: true
+
+      - name: 安装后端依赖
+        run: uv sync --all-groups
+
+      - name: 初始化数据库（迁移 + 种子数据）
+        run: |
+          uv run alembic upgrade head
+          uv run python init_data.py
+
+      - name: 启动应用 + 冒烟测试
+        run: |
+          .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+
+          # 等待应用就绪（最多 60 秒）
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8000/ > /dev/null; then
+              echo "✅ 应用已就绪（第 ${i} 秒）"
+              break
+            fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8000/ > /dev/null || { echo "❌ 应用启动失败"; exit 1; }
+
+          uv run python scripts/ci/smoke.py

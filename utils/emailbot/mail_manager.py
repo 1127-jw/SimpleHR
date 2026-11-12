@@ -12,6 +12,8 @@ from utils.emailbot.rules import DEFAULT_RULES
 
 from utils.emailbot.notify import notify
 
+from app.core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +74,12 @@ class MailManager:
 
         if mgr._initialized:
             logger.warning("MailManager 已初始化，跳过重复 init")
+            return mgr
+
+        # 开关内聚在这里：MAIL_BOT_ENABLED=false（CI / 测试环境）时直接跳过，
+        # 调用方无需自己判断，保证 init / close 调用始终对称
+        if not get_settings().MAIL_BOT_ENABLED:
+            logger.info("MAIL_BOT_ENABLED=false，跳过邮件机器人初始化")
             return mgr
 
         logger.info("MailManager 初始化中...")
@@ -145,7 +153,7 @@ class MailManager:
         mgr = cls.get()
 
         if not mgr._initialized:
-            logger.warning("MailManager 未初始化，跳过 close")
+            logger.info("MailManager 未初始化（可能已被 MAIL_BOT_ENABLED=false 跳过），无需关闭")
             return
 
         logger.info("MailManager 关闭中...")
