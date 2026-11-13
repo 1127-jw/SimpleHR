@@ -14,7 +14,8 @@ from app.core import rate_limit
 from app.core.audit import audit
 from app.schemas.user_schema import UserLoginReqSH, UserLoginResSH, RefreshRequest, LogoutRequest, UserInviteSchema, \
     UserRegisterReqSchema, UserRegisterResSchema, UserListResponseSchema, UserStatusUpdateSchema, \
-    DepartmentListRespSchema, DingdingUserRespSchema, AssignDepartmentSchema, HrListRespSchema, UserSH, HrSchema
+    DepartmentListRespSchema, DingdingUserRespSchema, AssignDepartmentSchema, HrListRespSchema, UserSH, HrSchema, \
+    ChangePasswordSchema
 from app.schemas.response_schema import ResponseSchema
 from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user, get_super_user
 from app.service import auth_ser
@@ -105,6 +106,24 @@ async def logout(
 async def me(user: UserModel = Depends(get_current_user)):
     """获取当前登录用户信息（不含密码哈希）。"""
     return UserSH.model_validate(user)
+
+@router.post("/password", summary="修改密码", response_model=ResponseSchema)
+async def change_password(
+    password_data: ChangePasswordSchema,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    current_user: UserModel = Depends(get_current_user),
+):
+    """修改当前登录用户密码。"""
+    if password_data.new_password != password_data.confirm_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="两次输入的新密码不一致")
+
+    if not current_user.check_password(password_data.old_password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="旧密码错误")
+
+    async with session.begin():
+        current_user.password = password_data.new_password
+
+    return ResponseSchema()
 
 @router.post("/invite", summary="邀请用户", response_model=ResponseSchema)
 async def invite_user(

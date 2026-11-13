@@ -98,3 +98,13 @@ export const assignDepartments = (data: AssignDepartmentsSchema) => {
 export const getHRList = () => {
   return request.get<HrListResponse>('/user/hr/list')
 }
+
+export interface ChangePasswordData {
+  old_password: string
+  new_password: string
+  confirm_password: string
+}
+
+export const changePassword = (data: ChangePasswordData) => {
+  return request.post<ResponseSchema>('/user/password', data)
+}

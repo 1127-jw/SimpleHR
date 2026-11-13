@@ -77,6 +77,13 @@ class UserStatusUpdateSchema(BaseModel):
     email: EmailStr = Field(..., description="Email address")
     status: UserStatus = Field(..., description="new status")
 
+class ChangePasswordSchema(BaseModel):
+    old_password: str = Field(..., min_length=6, max_length=15, description="旧密码")
+    new_password: str = Field(..., min_length=6, max_length=15, description="新密码")
+    confirm_password: str = Field(..., min_length=6, max_length=15, description="确认新密码")
+
+    model_config = ConfigDict(extra="forbid")
+
 class DepartmentListRespSchema(BaseModel):
     departments: List[DepartmentSH]
 

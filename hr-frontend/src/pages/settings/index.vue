@@ -38,6 +38,51 @@
       </el-descriptions>
     </el-card>
 
+    <!-- 修改密码 -->
+    <el-card shadow="never">
+      <template #header>
+        <span class="font-semibold">修改密码</span>
+      </template>
+      <el-form
+        ref="passwordFormRef"
+        :model="passwordForm"
+        :rules="passwordRules"
+        label-width="120px"
+        style="max-width: 500px"
+      >
+        <el-form-item label="旧密码" prop="old_password">
+          <el-input
+            v-model="passwordForm.old_password"
+            type="password"
+            placeholder="请输入旧密码"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item label="新密码" prop="new_password">
+          <el-input
+            v-model="passwordForm.new_password"
+            type="password"
+            placeholder="请输入新密码（6-15位）"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item label="确认新密码" prop="confirm_password">
+          <el-input
+            v-model="passwordForm.confirm_password"
+            type="password"
+            placeholder="请再次输入新密码"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="handleChangePassword" :loading="passwordLoading">
+            确认修改
+          </el-button>
+          <el-button @click="resetPasswordForm">重置</el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
     <!-- 钉钉绑定 -->
     <el-card shadow="never">
       <template #header>
@@ -99,16 +144,76 @@
 
 <script lang="ts" setup>
 import { ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Link, Refresh } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
-import { getDingtalkAuthorizeUrl, getDingtalkStatus, type DingtalkUser } from '@/apis/user_apis'
+import { getDingtalkAuthorizeUrl, getDingtalkStatus, changePassword, type DingtalkUser } from '@/apis/user_apis'
 
 const userStore = useUserStore()
 
 const dingtalkUser = ref<DingtalkUser | null>(null)
 const loading = ref(false)
 const binding = ref(false)
+const passwordLoading = ref(false)
+const passwordFormRef = ref<FormInstance>()
+
+const passwordForm = ref({
+  old_password: '',
+  new_password: '',
+  confirm_password: '',
+})
+
+const validatePass = (rule: any, value: any, callback: any) => {
+  if (value === '') {
+    callback(new Error('请输入密码'))
+  } else if (value.length < 6 || value.length > 15) {
+    callback(new Error('密码长度应为 6 到 15 个字符'))
+  } else {
+    callback()
+  }
+}
+
+const validateConfirmPass = (rule: any, value: any, callback: any) => {
+  if (value === '') {
+    callback(new Error('请再次输入密码'))
+  } else if (value !== passwordForm.value.new_password) {
+    callback(new Error('两次输入的密码不一致'))
+  } else {
+    callback()
+  }
+}
+
+const passwordRules: FormRules = {
+  old_password: [{ validator: validatePass, trigger: 'blur' }],
+  new_password: [{ validator: validatePass, trigger: 'blur' }],
+  confirm_password: [{ validator: validateConfirmPass, trigger: 'blur' }],
+}
+
+const handleChangePassword = async () => {
+  if (!passwordFormRef.value) return
+  await passwordFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    passwordLoading.value = true
+    try {
+      await changePassword(passwordForm.value)
+      ElMessage.success('密码修改成功')
+      resetPasswordForm()
+    } catch (error: any) {
+      ElMessage.error(error.response?.data?.detail ?? '密码修改失败')
+    } finally {
+      passwordLoading.value = false
+    }
+  })
+}
+
+const resetPasswordForm = () => {
+  passwordFormRef.value?.resetFields()
+  passwordForm.value = {
+    old_password: '',
+    new_password: '',
+    confirm_password: '',
+  }
+}
 
 const statusText = (status?: string) => {
   const map: Record<string, string> = {
