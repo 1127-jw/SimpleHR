@@ -1,7 +1,7 @@
 <template>
-  <div>
-    <div class="flex items-center justify-between mb-4">
-      <h1 class="text-xl font-semibold">HR管理</h1>
+  <div class="page-panel space-y-4">
+    <div class="flex items-center justify-between">
+      <h1 class="page-title">HR管理</h1>
     </div>
 
     <div>
@@ -26,7 +26,7 @@
     </div>
 
     <el-dialog v-model="assignVisible" title="指派负责部门" width="520px">
-      <div class="mb-3 text-sm text-gray-600" v-if="selectedHR">
+      <div class="mb-3 text-sm text-desc" v-if="selectedHR">
         {{ selectedHR.realname }}（{{ selectedHR.email }}）
       </div>
 

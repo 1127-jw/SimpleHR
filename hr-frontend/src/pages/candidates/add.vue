@@ -1,95 +1,103 @@
 <template>
-  <div class="mb-4">
-    <div class="mb-3">
-      <el-button link class="back-link" @click="goBackToCandidates">
-        <el-icon><ArrowLeft /></el-icon>
-        <span class="ml-1">返回列表</span>
-      </el-button>
-    </div>
-    <h1 class="text-2xl font-bold">添加候选人</h1>
-  </div>
-  <div>
-    <div class="content-area">
-      <div class="pdf-viewer">
-        <el-upload
-          v-if="!resumeUrl"
-          name="resume_file"
-          class="upload-demo"
-          drag
-          :http-request="handleUploadResume"
-          :show-file-list="false"
-          accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-        >
-          <el-icon class="el-icon--upload"><upload-filled /></el-icon>
-          <div class="el-upload__text">将文件拖到此处，或<em>点击上传</em></div>
-          <template #tip>
-            <div class="el-upload__tip">支持 pdf/doc/docx/png/jpg/jpeg 格式</div>
-          </template>
-        </el-upload>
-        <embed v-else :src="resumeUrl" type="application/pdf" width="100%" height="100%" />
+  <div class="page-panel space-y-4">
+    <div>
+      <div class="mb-3">
+        <el-button link class="back-link" @click="goBackToCandidates">
+          <el-icon><ArrowLeft /></el-icon>
+          <span class="ml-1">返回列表</span>
+        </el-button>
       </div>
-      <div class="ocr-form">
-        <el-form :model="ocrResult" label-width="120px">
-          <el-form-item label="职位">
-            <el-select v-model="selectedPosition">
-              <el-option
-                v-for="position in positions"
-                :key="position.id"
-                :label="position.title"
-                :value="position.id"
-              ></el-option>
-            </el-select>
-          </el-form-item>
-          <el-form-item label="姓名">
-            <el-input v-model="ocrResult.name"></el-input>
-          </el-form-item>
-          <el-form-item label="性别">
-            <el-input v-model="ocrResult.gender"></el-input>
-          </el-form-item>
-          <el-form-item label="出生日期">
-            <el-input v-model="ocrResult.birthday"></el-input>
-          </el-form-item>
-          <el-form-item label="手机号">
-            <el-input v-model="ocrResult.phone_number"></el-input>
-          </el-form-item>
-          <el-form-item label="邮箱">
-            <el-input v-model="ocrResult.email"></el-input>
-          </el-form-item>
-          <el-form-item label="工作经验（年）">
-            <el-input-number
-              v-model="ocrResult.work_year"
-              :min="0"
-              :max="50"
-              :precision="0"
-              placeholder="由简历自动提取，可手动调整"
-              style="width: 240px"
-            />
-            <span class="ml-2 text-xs text-gray-400">简历未明确写明时，取最早项目开始到最晚项目结束的年限</span>
-          </el-form-item>
-          <el-form-item label="教育经历">
-            <el-input type="textarea" v-model="ocrResult.education_experience" :rows="3"></el-input>
-          </el-form-item>
-          <el-form-item label="工作经历">
-            <el-input type="textarea" v-model="ocrResult.work_experience" :rows="4"></el-input>
-          </el-form-item>
-          <el-form-item label="项目经历">
-            <el-input type="textarea" v-model="ocrResult.project_experience" :rows="8"></el-input>
-          </el-form-item>
-          <el-form-item label="技能">
-            <el-input type="textarea" v-model="ocrResult.skills" :rows="3"></el-input>
-          </el-form-item>
-          <el-form-item label="自我评价">
-            <el-input type="textarea" v-model="ocrResult.self_evaluation" :rows="3"></el-input>
-          </el-form-item>
-          <el-form-item label="其他信息">
-            <el-input type="textarea" v-model="ocrResult.other_information" :rows="3"></el-input>
-          </el-form-item>
-          <el-form-item>
-            <div class="text-right">
-              <el-button type="primary" @click="createCandidateFunc">确定</el-button>
-            </div>
-          </el-form-item>
-        </el-form>
+      <h1 class="page-title">添加候选人</h1>
+    </div>
+    <div>
+      <div class="content-area">
+        <div class="pdf-viewer">
+          <el-upload
+            v-if="!resumeUrl"
+            name="resume_file"
+            class="upload-demo"
+            drag
+            :http-request="handleUploadResume"
+            :show-file-list="false"
+            accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+          >
+            <el-icon class="el-icon--upload"><upload-filled /></el-icon>
+            <div class="el-upload__text">将文件拖到此处，或<em>点击上传</em></div>
+            <template #tip>
+              <div class="el-upload__tip">支持 pdf/doc/docx/png/jpg/jpeg 格式</div>
+            </template>
+          </el-upload>
+          <embed v-else :src="resumeUrl" type="application/pdf" width="100%" height="100%" />
+        </div>
+        <div class="ocr-form">
+          <el-form :model="ocrResult" label-width="120px">
+            <el-form-item label="职位">
+              <el-select v-model="selectedPosition">
+                <el-option
+                  v-for="position in positions"
+                  :key="position.id"
+                  :label="position.title"
+                  :value="position.id"
+                ></el-option>
+              </el-select>
+            </el-form-item>
+            <el-form-item label="姓名">
+              <el-input v-model="ocrResult.name"></el-input>
+            </el-form-item>
+            <el-form-item label="性别">
+              <el-input v-model="ocrResult.gender"></el-input>
+            </el-form-item>
+            <el-form-item label="出生日期">
+              <el-input v-model="ocrResult.birthday"></el-input>
+            </el-form-item>
+            <el-form-item label="手机号">
+              <el-input v-model="ocrResult.phone_number"></el-input>
+            </el-form-item>
+            <el-form-item label="邮箱">
+              <el-input v-model="ocrResult.email"></el-input>
+            </el-form-item>
+            <el-form-item label="工作经验（年）">
+              <el-input-number
+                v-model="ocrResult.work_year"
+                :min="0"
+                :max="50"
+                :precision="0"
+                placeholder="由简历自动提取，可手动调整"
+                style="width: 240px"
+              />
+              <span class="ml-2 text-xs text-muted"
+                >简历未明确写明时，取最早项目开始到最晚项目结束的年限</span
+              >
+            </el-form-item>
+            <el-form-item label="教育经历">
+              <el-input
+                type="textarea"
+                v-model="ocrResult.education_experience"
+                :rows="3"
+              ></el-input>
+            </el-form-item>
+            <el-form-item label="工作经历">
+              <el-input type="textarea" v-model="ocrResult.work_experience" :rows="4"></el-input>
+            </el-form-item>
+            <el-form-item label="项目经历">
+              <el-input type="textarea" v-model="ocrResult.project_experience" :rows="8"></el-input>
+            </el-form-item>
+            <el-form-item label="技能">
+              <el-input type="textarea" v-model="ocrResult.skills" :rows="3"></el-input>
+            </el-form-item>
+            <el-form-item label="自我评价">
+              <el-input type="textarea" v-model="ocrResult.self_evaluation" :rows="3"></el-input>
+            </el-form-item>
+            <el-form-item label="其他信息">
+              <el-input type="textarea" v-model="ocrResult.other_information" :rows="3"></el-input>
+            </el-form-item>
+            <el-form-item>
+              <div class="text-right">
+                <el-button type="primary" @click="createCandidateFunc">确定</el-button>
+              </div>
+            </el-form-item>
+          </el-form>
+        </div>
       </div>
     </div>
   </div>
@@ -302,11 +310,14 @@ const createCandidateFunc = async (): Promise<void> => {
 
 .pdf-viewer {
   flex: 1;
-  border: 1px solid #ccc;
+  border: 1px solid var(--border-default);
+  background: var(--surface-2);
+  border-radius: var(--radius-panel);
   height: 80vh;
   display: flex;
   justify-content: center;
   align-items: center;
+  overflow: hidden;
 }
 
 .pdf-viewer .upload-demo {
@@ -333,26 +344,10 @@ const createCandidateFunc = async (): Promise<void> => {
 }
 
 .back-link {
-  color: #909399;
+  color: var(--text-placeholder);
 }
 
 .back-link:hover {
-  color: #606266;
-}
-
-.back-link {
-  color: #909399;
-}
-
-.back-link:hover {
-  color: #606266;
-}
-
-.back-link {
-  color: #909399;
-}
-
-.back-link:hover {
-  color: #606266;
+  color: var(--brand-bright);
 }
 </style>

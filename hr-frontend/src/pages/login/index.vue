@@ -5,7 +5,6 @@
       :model="ruleForm"
       :rules="rules"
       label-position="top"
-      class="space-y-6"
       @submit.prevent="submitForm(ruleFormRef)"
     >
       <el-form-item label="邮箱" prop="email">
@@ -27,14 +26,10 @@
       </div>
     </el-form>
 
-    <p class="mt-10 text-center text-sm text-gray-500">
+    <p class="mt-6 text-center text-sm text-desc">
       还没有账户?
       {{ ' ' }}
-      <router-link
-        to="/register"
-        class="font-semibold leading-6 text-indigo-600 hover:text-indigo-500"
-        >立即注册</router-link
-      >
+      <router-link to="/register" class="link-brand">立即注册</router-link>
     </p>
   </AuthLayout>
 </template>

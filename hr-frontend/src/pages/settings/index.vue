@@ -1,6 +1,6 @@
 <template>
-  <div class="space-y-6">
-    <h1 class="text-2xl font-bold text-gray-900">个人设置</h1>
+  <div class="page-panel space-y-6">
+    <h1 class="page-title">个人设置</h1>
 
     <!-- 用户信息 -->
     <el-card shadow="never">
@@ -28,10 +28,7 @@
           <el-tag v-else type="info" size="small">员工</el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="账号状态">
-          <el-tag
-            :type="userStore.user?.status === 'ACTIVE' ? 'success' : 'danger'"
-            size="small"
-          >
+          <el-tag :type="userStore.user?.status === 'ACTIVE' ? 'success' : 'danger'" size="small">
             {{ statusText(userStore.user?.status) }}
           </el-tag>
         </el-descriptions-item>
@@ -99,8 +96,8 @@
             {{ dingtalkUser.nick?.charAt(0) ?? '钉' }}
           </el-avatar>
           <div>
-            <div class="text-lg font-medium text-gray-900">{{ dingtalkUser.nick }}</div>
-            <div class="text-sm text-gray-500">{{ dingtalkUser.mobile }}</div>
+            <div class="text-lg font-medium text-strong">{{ dingtalkUser.nick }}</div>
+            <div class="text-sm text-desc">{{ dingtalkUser.mobile }}</div>
           </div>
         </div>
         <div class="flex gap-2">
@@ -116,10 +113,8 @@
       </div>
 
       <div v-else class="text-center py-6">
-        <el-icon :size="48" class="text-gray-300 mb-3"><Link /></el-icon>
-        <p class="text-gray-500 mb-4">
-          绑定钉钉后，可直接使用钉钉扫码登录，并同步面试日程到钉钉日历
-        </p>
+        <el-icon :size="48" class="text-muted mb-3"><Link /></el-icon>
+        <p class="text-desc mb-4">绑定钉钉后，可直接使用钉钉扫码登录，并同步面试日程到钉钉日历</p>
         <el-button type="primary" size="large" @click="handleBind" :loading="binding">
           <el-icon class="mr-1"><Link /></el-icon>
           绑定钉钉账号
@@ -132,7 +127,7 @@
       <template #header>
         <span class="font-semibold">绑定说明</span>
       </template>
-      <ul class="list-disc list-inside space-y-2 text-sm text-gray-600">
+      <ul class="list-disc list-inside space-y-2 text-sm text-desc">
         <li>绑定钉钉后，面试官的空闲时间将自动与钉钉日历同步</li>
         <li>面试安排确认后，会自动在钉钉日历中创建日程</li>
         <li>可随时重新绑定，新绑定会覆盖旧的钉钉账号</li>
@@ -147,7 +142,12 @@ import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Link, Refresh } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
-import { getDingtalkAuthorizeUrl, getDingtalkStatus, changePassword, type DingtalkUser } from '@/apis/user_apis'
+import {
+  getDingtalkAuthorizeUrl,
+  getDingtalkStatus,
+  changePassword,
+  type DingtalkUser,
+} from '@/apis/user_apis'
 
 const userStore = useUserStore()
 

@@ -48,11 +48,7 @@ class FakeRedis:
         return removed
 
     async def eval(self, script: str, numkeys: int, *keys_and_args: Any) -> Any:
-        """仅支持 app.core.auth 的「原子消费」脚本：GET + DEL。
 
-        真实 Redis 会在服务端原子执行这段 Lua；测试替身用同步 dict 操作
-        模拟同样的语义（单线程 asyncio 下等价于原子）。
-        """
         key = keys_and_args[0]
         value = self.store.get(key)
         if value is not None:
@@ -69,9 +65,6 @@ def fake_redis() -> FakeRedis:
 @pytest.fixture
 def state_factory():
     """构造一份最小的 CandidateRecruitmentState。
-
-    路由函数只用到 ``candidate.id`` / ``candidate.name``，所以用
-    SimpleNamespace 代替重量级的 Pydantic schema。
     """
 
     def _make(**overrides) -> dict:
@@ -89,10 +82,8 @@ def state_factory():
 
 @pytest.fixture
 def work_dir():
-    """工作区内的临时目录。
-
-    不用 pytest 的 ``tmp_path``：它落在系统 Temp 下，部分受限环境
-    （沙箱 / 只读 Temp）会写不进去。
+    """
+    工作区内的临时目录。
     """
     base = Path(__file__).resolve().parent / ".tmp"
     path = base / uuid4().hex
@@ -102,7 +93,9 @@ def work_dir():
     finally:
         shutil.rmtree(path, ignore_errors=True)
 
-
+# autouse=True 是 pytest 中 @pytest.fixture 的一个参数。
+# 设置后，这个 fixture 会在它的作用域内自动对所有测试生效，
+# 不需要在测试函数参数里显式写出 fixture 名
 @pytest.fixture(autouse=True)
 def _quiet_logging():
     """测试期间把 root logger 压到 WARNING，避免日志刷屏。"""

@@ -1,8 +1,8 @@
 <template>
-  <div class="p-4 space-y-4">
+  <div class="page-panel space-y-4">
     <!-- Header with Invite Button -->
     <div class="flex justify-between items-center">
-      <h1 class="text-2xl font-bold">员工管理</h1>
+      <h1 class="page-title">员工管理</h1>
       <el-button type="primary" @click="openInviteDialog">
         <el-icon class="mr-1"><Plus /></el-icon>
         邀请员工

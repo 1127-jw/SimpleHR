@@ -1,7 +1,7 @@
 <template>
-  <div class="p-4">
-    <div class="flex justify-between items-center mb-4">
-      <h1 class="text-2xl font-bold">职位管理</h1>
+  <div class="page-panel space-y-4">
+    <div class="flex justify-between items-center">
+      <h1 class="page-title">职位管理</h1>
       <el-button type="primary" @click="handleAdd"
         ><el-icon><Plus /></el-icon> 添加职位</el-button
       >
@@ -18,51 +18,51 @@
               </span>
             </template>
             <div class="position-popover">
-              <h3 class="text-lg font-bold mb-3 text-gray-800">{{ row.title }}</h3>
+              <h3 class="text-lg font-bold mb-3">{{ row.title }}</h3>
               <div class="space-y-2 text-sm">
                 <div v-if="row.department">
-                  <span class="font-semibold text-gray-600">部门：</span>
-                  <span class="text-gray-800">{{ row.department.name }}</span>
+                  <span class="font-semibold text-desc">部门：</span>
+                  <span>{{ row.department.name }}</span>
                 </div>
                 <div v-if="row.description">
-                  <span class="font-semibold text-gray-600">职位描述：</span>
-                  <p class="text-gray-800 mt-1 whitespace-pre-wrap">{{ row.description }}</p>
+                  <span class="font-semibold text-desc">职位描述：</span>
+                  <p class="mt-1 whitespace-pre-wrap">{{ row.description }}</p>
                 </div>
                 <div v-if="row.requirements">
-                  <span class="font-semibold text-gray-600">职位要求：</span>
-                  <p class="text-gray-800 mt-1 whitespace-pre-wrap">{{ row.requirements }}</p>
+                  <span class="font-semibold text-desc">职位要求：</span>
+                  <p class="mt-1 whitespace-pre-wrap">{{ row.requirements }}</p>
                 </div>
                 <div>
-                  <span class="font-semibold text-gray-600">薪资范围：</span>
-                  <span class="text-gray-800">
+                  <span class="font-semibold text-desc">薪资范围：</span>
+                  <span>
                     {{ row.min_salary ?? '面议' }} - {{ row.max_salary ?? '面议' }} 元/月
                   </span>
                 </div>
                 <div>
-                  <span class="font-semibold text-gray-600">招聘人数：</span>
-                  <span class="text-gray-800">{{ row.recruitment_count }} 人</span>
+                  <span class="font-semibold text-desc">招聘人数：</span>
+                  <span>{{ row.recruitment_count }} 人</span>
                 </div>
                 <div>
-                  <span class="font-semibold text-gray-600">学历要求：</span>
-                  <span class="text-gray-800">{{ row.education }}</span>
+                  <span class="font-semibold text-desc">学历要求：</span>
+                  <span>{{ row.education }}</span>
                 </div>
                 <div>
-                  <span class="font-semibold text-gray-600">工作年限：</span>
-                  <span class="text-gray-800">{{ row.work_year }} 年</span>
+                  <span class="font-semibold text-desc">工作年限：</span>
+                  <span>{{ row.work_year }} 年</span>
                 </div>
                 <div>
-                  <span class="font-semibold text-gray-600">状态：</span>
+                  <span class="font-semibold text-desc">状态：</span>
                   <el-tag :type="row.is_open ? 'success' : 'danger'" size="small">
                     {{ row.is_open ? '开放' : '关闭' }}
                   </el-tag>
                 </div>
                 <div v-if="row.deadline">
-                  <span class="font-semibold text-gray-600">截止日期：</span>
-                  <span class="text-gray-800">{{ row.deadline }}</span>
+                  <span class="font-semibold text-desc">截止日期：</span>
+                  <span>{{ row.deadline }}</span>
                 </div>
                 <div>
-                  <span class="font-semibold text-gray-600">创建时间：</span>
-                  <span class="text-gray-800">{{ row.created_at }}</span>
+                  <span class="font-semibold text-desc">创建时间：</span>
+                  <span>{{ row.created_at }}</span>
                 </div>
               </div>
             </div>

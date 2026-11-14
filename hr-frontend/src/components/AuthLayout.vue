@@ -1,38 +1,12 @@
-<template>
-  <div
-    class="flex min-h-screen flex-1 flex-col justify-center px-6 py-12 lg:px-8 bg-gradient-to-br from-green-200 to-blue-300"
-  >
-    <div class="sm:mx-auto sm:w-full sm:max-w-sm">
-      <!-- Logo -->
-      <svg
-        class="mx-auto h-12 w-auto text-indigo-600"
-        viewBox="0 0 24 24"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path
-          fill-rule="evenodd"
-          d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm-2.625 7.5a.75.75 0 00-1.5 0v6a.75.75 0 001.5 0v-6zm3.375 0a.75.75 0 00-1.5 0v6a.75.75 0 001.5 0v-6z"
-          clip-rule="evenodd"
-        />
-      </svg>
-      <h2 class="mt-6 text-center text-2xl font-bold leading-9 tracking-tight text-gray-900">
-        {{ title }}
-      </h2>
-      <p v-if="subtitle" class="mt-2 text-center text-sm text-gray-500">
-        {{ subtitle }}
-      </p>
-    </div>
-
-    <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-sm">
-      <div class="bg-white px-6 py-12 shadow sm:rounded-lg sm:px-12">
-        <slot></slot>
-      </div>
-    </div>
-  </div>
-</template>
-
 <script setup lang="ts">
+/**
+ * 登录 / 注册布局：
+ * 暗色背景（光晕 + 网格 + 噪点）+ 品牌粒子字样 + 毛玻璃认证卡片。
+ * 与 SimpleYun 登录页保持同一套视觉语言。
+ */
+import LogoMark from './LogoMark.vue'
+import ParticleField from './ParticleField.vue'
+
 interface Props {
   title: string
   subtitle?: string
@@ -40,3 +14,54 @@ interface Props {
 
 defineProps<Props>()
 </script>
+
+<template>
+  <div class="auth-view">
+    <div class="bg" aria-hidden="true">
+      <div class="aurora aurora-a"></div>
+      <div class="aurora aurora-b"></div>
+      <div class="aurora aurora-c"></div>
+      <div class="grid-overlay"></div>
+      <div class="noise"></div>
+    </div>
+
+    <!-- 粒子背景：页面中央的 SimpleHR 由粒子拼成，鼠标划过会散开再聚合 -->
+    <ParticleField text="SimpleHR" variant="center" />
+
+    <nav class="topbar">
+      <div class="brand">
+        <span class="logo-mark"><LogoMark :size="26" /></span>
+        <span class="brand-name">智能招聘</span>
+      </div>
+      <span class="badge-preview"><span class="dot"></span>SIMPLE HR</span>
+    </nav>
+
+    <main class="auth-hero">
+      <div class="auth-copy">
+        <p class="eyebrow">SIMPLE · 智能招聘平台</p>
+        <h1 class="auth-title">让招聘，<br />更简单一点</h1>
+        <p class="auth-sub">
+          AI 简历解析 · 流程状态追踪 · 数据看板。<br />
+          从投递到入职，一个平台管理全部候选人。
+        </p>
+        <div class="auth-points">
+          <div class="point"><span class="pt-ic">⚡</span> 秒级简历解析</div>
+          <div class="point"><span class="pt-ic">↻</span> 状态流转可追踪</div>
+          <div class="point"><span class="pt-ic">◈</span> 数据驱动决策</div>
+        </div>
+      </div>
+
+      <div class="auth-card glass">
+        <h2 class="auth-card-title">{{ title }}</h2>
+        <p v-if="subtitle" class="auth-card-sub">{{ subtitle }}</p>
+        <div class="auth-card-body">
+          <slot></slot>
+        </div>
+      </div>
+    </main>
+
+    <footer class="auth-footer">
+      <span>智能招聘系统</span>
+    </footer>
+  </div>
+</template>

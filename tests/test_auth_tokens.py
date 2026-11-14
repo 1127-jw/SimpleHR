@@ -1,6 +1,5 @@
-"""Token 签发 / 过期 / 吊销。
-
-不连真实 Redis，用 conftest.FakeRedis 覆盖 setex / exists / delete。
+"""
+Token 签发 / 过期 / 吊销。
 """
 import datetime as dt
 

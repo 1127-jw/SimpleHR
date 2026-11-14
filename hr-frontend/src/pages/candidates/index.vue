@@ -1,216 +1,240 @@
 <template>
-  <div class="flex justify-between items-center mb-4">
-    <h1 class="text-2xl font-bold">候选人管理</h1>
-  </div>
-  <div>
-    <div class="flex justify-end mb-4">
-      <router-link to="/candidates/add">
-        <el-button type="primary">添加候选人</el-button>
-      </router-link>
+  <div class="page-panel space-y-4">
+    <div class="flex justify-between items-center">
+      <h1 class="page-title">候选人管理</h1>
     </div>
+    <div>
+      <div class="flex justify-end mb-4">
+        <router-link to="/candidates/add">
+          <el-button type="primary">添加候选人</el-button>
+        </router-link>
+      </div>
 
-    <div class="flex">
-      <el-table :data="candidates" style="width: 100%" border>
-        <el-table-column prop="name" label="姓名"></el-table-column>
-        <el-table-column prop="position.title" label="职位"></el-table-column>
-        <el-table-column label="性别">
-          <template #default="scope">
-            <el-tag v-if="scope.row.gender == '男'" type="success">男</el-tag>
-            <el-tag v-else-if="scope.row.gender == '女'" type="danger">女</el-tag>
+      <div class="flex">
+        <el-table :data="candidates" style="width: 100%" border>
+          <el-table-column prop="name" label="姓名"></el-table-column>
+          <el-table-column prop="position.title" label="职位"></el-table-column>
+          <el-table-column label="性别">
+            <template #default="scope">
+              <el-tag v-if="scope.row.gender == '男'" type="success">男</el-tag>
+              <el-tag v-else-if="scope.row.gender == '女'" type="danger">女</el-tag>
+              <el-tag v-else type="warning">未知</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="email" label="邮箱"></el-table-column>
+          <el-table-column prop="phone_number" label="手机"></el-table-column>
+          <el-table-column prop="status" label="状态">
+            <template #default="scope">
+              <el-tag :type="getStatusTagType(scope.row.status)">{{ scope.row.status }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="created_at" label="创建时间"></el-table-column>
+          <el-table-column label="错误信息" width="200">
+            <template #default="scope">
+              <el-tooltip
+                v-if="scope.row.error_message"
+                :content="scope.row.error_message"
+                placement="top"
+                :show-after="200"
+              >
+                <el-tag type="danger" size="small" effect="plain">
+                  {{
+                    scope.row.error_message.length > 20
+                      ? scope.row.error_message.slice(0, 20) + '...'
+                      : scope.row.error_message
+                  }}
+                </el-tag>
+              </el-tooltip>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作">
+            <template #default="scope">
+              <el-button link type="primary" @click="showDetails(scope.row)">详情</el-button>
+              <span class="ml-1"></span>
+              <el-button link type="primary" @click="openStatusDialog(scope.row)"
+                >修改状态</el-button
+              >
+              <span class="ml-1"></span>
+              <el-button link type="primary" @click="openResume(scope.row)">简历</el-button>
+              <span class="ml-1"></span>
+              <el-button link type="primary" @click="showAIScore(scope.row)">AI评分</el-button>
+              <span class="ml-1"></span>
+              <el-button link type="danger" @click="handleDelete(scope.row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <!-- 分页：每页 5 条 -->
+      <div class="mt-4 flex justify-end">
+        <el-pagination
+          background
+          :current-page="pagination.currentPage"
+          :page-size="pagination.pageSize"
+          :total="pagination.total"
+          layout="prev, pager, next"
+          @current-change="handlePageChange"
+        />
+      </div>
+
+      <el-dialog v-model="detailsDialogVisible" title="候选人详情">
+        <el-descriptions v-if="selectedCandidate" :column="2" border>
+          <el-descriptions-item label="姓名">{{ selectedCandidate.name }}</el-descriptions-item>
+          <el-descriptions-item label="职位">{{
+            selectedCandidate.position.title
+          }}</el-descriptions-item>
+          <el-descriptions-item label="性别">
+            <el-tag v-if="selectedCandidate.gender == '男'" type="success">男</el-tag>
+            <el-tag v-else-if="selectedCandidate.gender == '女'" type="danger">女</el-tag>
             <el-tag v-else type="warning">未知</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="email" label="邮箱"></el-table-column>
-        <el-table-column prop="phone_number" label="手机"></el-table-column>
-        <el-table-column prop="status" label="状态">
-          <template #default="scope">
-            <el-tag :type="getStatusTagType(scope.row.status)">{{ scope.row.status }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="created_at" label="创建时间"></el-table-column>
-        <el-table-column label="错误信息" width="200">
-          <template #default="scope">
-            <el-tooltip
-              v-if="scope.row.error_message"
-              :content="scope.row.error_message"
-              placement="top"
-              :show-after="200"
-            >
-              <el-tag type="danger" size="small" effect="plain">
-                {{ scope.row.error_message.length > 20 ? scope.row.error_message.slice(0, 20) + '...' : scope.row.error_message }}
-              </el-tag>
-            </el-tooltip>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作">
-          <template #default="scope">
-            <el-button link type="primary" @click="showDetails(scope.row)">详情</el-button>
-            <span class="ml-1"></span>
-            <el-button link type="primary" @click="openStatusDialog(scope.row)">修改状态</el-button>
-            <span class="ml-1"></span>
-            <el-button link type="primary" @click="openResume(scope.row)">简历</el-button>
-            <span class="ml-1"></span>
-            <el-button link type="primary" @click="showAIScore(scope.row)">AI评分</el-button>
-            <span class="ml-1"></span>
-            <el-button link type="danger" @click="handleDelete(scope.row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
-
-    <el-dialog v-model="detailsDialogVisible" title="候选人详情">
-      <el-descriptions v-if="selectedCandidate" :column="2" border>
-        <el-descriptions-item label="姓名">{{ selectedCandidate.name }}</el-descriptions-item>
-        <el-descriptions-item label="职位">{{
-          selectedCandidate.position.title
-        }}</el-descriptions-item>
-        <el-descriptions-item label="性别">
-          <el-tag v-if="selectedCandidate.gender == '男'" type="success">男</el-tag>
-          <el-tag v-else-if="selectedCandidate.gender == '女'" type="danger">女</el-tag>
-          <el-tag v-else type="warning">未知</el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="邮箱">{{ selectedCandidate.email }}</el-descriptions-item>
-        <el-descriptions-item label="手机">{{
-          selectedCandidate.phone_number
-        }}</el-descriptions-item>
-        <el-descriptions-item label="状态">
-          <el-tag :type="getStatusTagType(selectedCandidate.status as string)">{{
-            selectedCandidate.status
-          }}</el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item v-if="selectedCandidate.error_message" label="错误信息" :span="2">
-          <el-text type="danger" size="small">{{ selectedCandidate.error_message }}</el-text>
-        </el-descriptions-item>
-        <el-descriptions-item v-if="selectedCandidate.creator" label="推荐人">{{
-          selectedCandidate.creator.realname
-        }}</el-descriptions-item>
-        <!-- <el-descriptions-item label="创建时间">{{
+          </el-descriptions-item>
+          <el-descriptions-item label="邮箱">{{ selectedCandidate.email }}</el-descriptions-item>
+          <el-descriptions-item label="手机">{{
+            selectedCandidate.phone_number
+          }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag :type="getStatusTagType(selectedCandidate.status as string)">{{
+              selectedCandidate.status
+            }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="selectedCandidate.error_message" label="错误信息" :span="2">
+            <el-text type="danger" size="small">{{ selectedCandidate.error_message }}</el-text>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="selectedCandidate.creator" label="推荐人">{{
+            selectedCandidate.creator.realname
+          }}</el-descriptions-item>
+          <!-- <el-descriptions-item label="创建时间">{{
           selectedCandidate.created_at
         }}</el-descriptions-item> -->
-        <el-descriptions-item label="工作经历" :span="2">{{
-          selectedCandidate.work_experience || '-'
-        }}</el-descriptions-item>
-        <el-descriptions-item label="项目经历" :span="2">{{
-          selectedCandidate.project_experience || '-'
-        }}</el-descriptions-item>
-        <el-descriptions-item label="教育经历" :span="2">{{
-          selectedCandidate.education_experience || '-'
-        }}</el-descriptions-item>
-        <el-descriptions-item label="技能" :span="2">{{
-          selectedCandidate.skills || '-'
-        }}</el-descriptions-item>
-        <el-descriptions-item label="自我评价" :span="2">{{
-          selectedCandidate.self_evaluation || '-'
-        }}</el-descriptions-item>
-        <el-descriptions-item label="其他信息" :span="2">{{
-          selectedCandidate.other_information || '-'
-        }}</el-descriptions-item>
-      </el-descriptions>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="detailsDialogVisible = false">关闭</el-button>
-        </span>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="aiScoreDialogVisible" title="AI评分详情">
-      <div v-if="aiScore">
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="综合得分">{{ aiScore.overall_score }}</el-descriptions-item>
-          <el-descriptions-item label="工作经验">{{
-            aiScore.work_experience_score
+          <el-descriptions-item label="工作经历" :span="2">{{
+            selectedCandidate.work_experience || '-'
           }}</el-descriptions-item>
-          <el-descriptions-item label="技术能力">{{
-            aiScore.technical_skills_score
+          <el-descriptions-item label="项目经历" :span="2">{{
+            selectedCandidate.project_experience || '-'
           }}</el-descriptions-item>
-          <el-descriptions-item label="软技能">{{
-            aiScore.soft_skills_score
+          <el-descriptions-item label="教育经历" :span="2">{{
+            selectedCandidate.education_experience || '-'
           }}</el-descriptions-item>
-          <el-descriptions-item label="教育背景">{{
-            aiScore.educational_background_score
+          <el-descriptions-item label="技能" :span="2">{{
+            selectedCandidate.skills || '-'
           }}</el-descriptions-item>
-          <el-descriptions-item label="项目经验">{{
-            aiScore.project_experience_score
+          <el-descriptions-item label="自我评价" :span="2">{{
+            selectedCandidate.self_evaluation || '-'
           }}</el-descriptions-item>
-          <el-descriptions-item label="优势" :span="2">
-            <ul>
-              <li v-for="(strength, index) in aiScore.strengths" :key="index">{{ strength }}</li>
-            </ul>
-          </el-descriptions-item>
-          <el-descriptions-item label="劣势" :span="2">
-            <ul>
-              <li v-for="(weakness, index) in aiScore.weaknesses" :key="index">{{ weakness }}</li>
-            </ul>
-          </el-descriptions-item>
-          <el-descriptions-item label="总结" :span="2">{{ aiScore.summary }}</el-descriptions-item>
+          <el-descriptions-item label="其他信息" :span="2">{{
+            selectedCandidate.other_information || '-'
+          }}</el-descriptions-item>
         </el-descriptions>
-      </div>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="aiScoreDialogVisible = false">关闭</el-button>
-        </span>
-      </template>
-    </el-dialog>
+        <template #footer>
+          <span class="dialog-footer">
+            <el-button @click="detailsDialogVisible = false">关闭</el-button>
+          </span>
+        </template>
+      </el-dialog>
 
-    <el-dialog v-model="statusDialogVisible" title="修改候选人状态" width="520px">
-      <el-form :model="statusForm" label-width="100px">
-        <el-form-item label="当前状态">
-          <el-tag
-            v-if="statusCandidate"
-            :type="getStatusTagType(statusCandidate.status as string)"
-            >{{ statusCandidate.status }}</el-tag
-          >
-        </el-form-item>
+      <el-dialog v-model="aiScoreDialogVisible" title="AI评分详情">
+        <div v-if="aiScore">
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="综合得分">{{
+              aiScore.overall_score
+            }}</el-descriptions-item>
+            <el-descriptions-item label="工作经验">{{
+              aiScore.work_experience_score
+            }}</el-descriptions-item>
+            <el-descriptions-item label="技术能力">{{
+              aiScore.technical_skills_score
+            }}</el-descriptions-item>
+            <el-descriptions-item label="软技能">{{
+              aiScore.soft_skills_score
+            }}</el-descriptions-item>
+            <el-descriptions-item label="教育背景">{{
+              aiScore.educational_background_score
+            }}</el-descriptions-item>
+            <el-descriptions-item label="项目经验">{{
+              aiScore.project_experience_score
+            }}</el-descriptions-item>
+            <el-descriptions-item label="优势" :span="2">
+              <ul>
+                <li v-for="(strength, index) in aiScore.strengths" :key="index">{{ strength }}</li>
+              </ul>
+            </el-descriptions-item>
+            <el-descriptions-item label="劣势" :span="2">
+              <ul>
+                <li v-for="(weakness, index) in aiScore.weaknesses" :key="index">{{ weakness }}</li>
+              </ul>
+            </el-descriptions-item>
+            <el-descriptions-item label="总结" :span="2">{{
+              aiScore.summary
+            }}</el-descriptions-item>
+          </el-descriptions>
+        </div>
+        <template #footer>
+          <span class="dialog-footer">
+            <el-button @click="aiScoreDialogVisible = false">关闭</el-button>
+          </span>
+        </template>
+      </el-dialog>
 
-        <el-form-item label="目标状态" required>
-          <el-select v-model="statusForm.status" placeholder="请选择目标状态" style="width: 100%">
-            <el-option v-for="s in selectableNextStatuses" :key="s" :label="s" :value="s" />
-          </el-select>
-        </el-form-item>
+      <el-dialog v-model="statusDialogVisible" title="修改候选人状态" width="520px">
+        <el-form :model="statusForm" label-width="100px">
+          <el-form-item label="当前状态">
+            <el-tag
+              v-if="statusCandidate"
+              :type="getStatusTagType(statusCandidate.status as string)"
+              >{{ statusCandidate.status }}</el-tag
+            >
+          </el-form-item>
 
-        <el-form-item v-if="statusForm.status === '待面试'" label="面试时间" required>
-          <el-date-picker
-            v-model="statusForm.interview_time"
-            type="datetime"
-            placeholder="请选择面试时间"
-            style="width: 100%"
+          <el-form-item label="目标状态" required>
+            <el-select v-model="statusForm.status" placeholder="请选择目标状态" style="width: 100%">
+              <el-option v-for="s in selectableNextStatuses" :key="s" :label="s" :value="s" />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item v-if="statusForm.status === '待面试'" label="面试时间" required>
+            <el-date-picker
+              v-model="statusForm.interview_time"
+              type="datetime"
+              placeholder="请选择面试时间"
+              style="width: 100%"
+            />
+          </el-form-item>
+
+          <el-form-item v-if="statusForm.status === '面试未通过'" label="未通过原因" required>
+            <el-input
+              v-model="statusForm.rejection_reason"
+              type="textarea"
+              :rows="3"
+              placeholder="请输入未通过原因"
+            />
+          </el-form-item>
+
+          <el-alert
+            v-if="statusForm.status === CandidateStatusEnum.MANUAL_PASSED"
+            type="warning"
+            :closable="false"
+            show-icon
+            class="mb-4"
+            title="系统将重新发送面试邀请邮件，并开始协商面试时间"
           />
-        </el-form-item>
+        </el-form>
 
-        <el-form-item v-if="statusForm.status === '面试未通过'" label="未通过原因" required>
-          <el-input
-            v-model="statusForm.rejection_reason"
-            type="textarea"
-            :rows="3"
-            placeholder="请输入未通过原因"
-          />
-        </el-form-item>
-
-        <el-alert
-          v-if="statusForm.status === CandidateStatusEnum.MANUAL_PASSED"
-          type="warning"
-          :closable="false"
-          show-icon
-          class="mb-4"
-          title="系统将重新发送面试邀请邮件，并开始协商面试时间"
-        />
-      </el-form>
-
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="statusDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="statusSubmitting" @click="submitStatus"
-            >确认</el-button
-          >
-        </span>
-      </template>
-    </el-dialog>
+        <template #footer>
+          <span class="dialog-footer">
+            <el-button @click="statusDialogVisible = false">取消</el-button>
+            <el-button type="primary" :loading="statusSubmitting" @click="submitStatus"
+              >确认</el-button
+            >
+          </span>
+        </template>
+      </el-dialog>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getCandidates,
@@ -225,6 +249,18 @@ import { getPositionList, type Position } from '@/apis/position_api'
 
 const candidates = ref<Candidate[]>([])
 const positions = ref<Position[]>([])
+
+// 候选人列表分页（每页 5 条）
+const pagination = reactive({
+  currentPage: 1,
+  pageSize: 5,
+  total: 0,
+})
+
+const handlePageChange = (page: number) => {
+  pagination.currentPage = page
+  fetchCandidates()
+}
 
 const detailsDialogVisible = ref(false)
 const selectedCandidate = ref<Candidate | null>(null)
@@ -241,8 +277,16 @@ const openResume = async (candidate: Candidate) => {
     const url = URL.createObjectURL(blob)
     window.open(url, '_blank')
     setTimeout(() => URL.revokeObjectURL(url), 60_000)
-  } catch {
-    ElMessage.error('简历下载失败，或您无权访问该候选人的简历')
+  } catch (error: any) {
+    // 区分错误类型：403 无权访问、404 文件缺失，其余归为下载失败
+    const status = error?.response?.status
+    if (status === 403) {
+      ElMessage.error('无权访问该候选人的简历')
+    } else if (status === 404) {
+      ElMessage.error('简历文件不存在')
+    } else {
+      ElMessage.error('简历下载失败，请稍后重试')
+    }
   }
 }
 
@@ -331,8 +375,12 @@ const submitStatus = async () => {
 
 const fetchCandidates = async () => {
   try {
-    const response = await getCandidates({})
+    const response = await getCandidates({
+      page: pagination.currentPage,
+      size: pagination.pageSize,
+    })
     candidates.value = response.candidates || []
+    pagination.total = response.total ?? 0
   } catch (error) {
     ElMessage.error('获取候选人列表失败')
   }
@@ -408,6 +456,10 @@ const handleDelete = async (candidate: Candidate) => {
   try {
     await deleteCandidate(candidate.id)
     ElMessage.success('候选人已删除')
+    // 删除后若当前页已空且不是第一页，回退一页
+    if (candidates.value.length === 1 && pagination.currentPage > 1) {
+      pagination.currentPage -= 1
+    }
     await fetchCandidates()
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail ?? '删除失败')

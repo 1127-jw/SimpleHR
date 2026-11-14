@@ -1,38 +1,26 @@
 <template>
-  <div class="p-4 space-y-4">
+  <div class="page-panel space-y-4">
     <div class="flex items-center justify-between">
       <div>
-        <h1 class="text-2xl font-bold">Dashboard</h1>
-        <p class="text-sm text-gray-500">近 7 天趋势 + 职位/候选人指标</p>
+        <h1 class="page-title">数据总览</h1>
+        <p class="text-sm text-desc mt-1">近 7 天趋势 + 职位/候选人指标</p>
       </div>
-      <button
-        class="px-3 py-2 rounded border text-sm hover:bg-gray-50"
-        :disabled="loading"
-        @click="refresh"
-      >
-        刷新
-      </button>
+      <button class="btn btn-secondary" :disabled="loading" @click="refresh">刷新</button>
     </div>
 
-    <div v-if="error" class="p-3 rounded border border-red-200 bg-red-50 text-red-700 text-sm">
+    <div v-if="error" class="error-banner">
       {{ error }}
     </div>
 
-    <div
-      class="p-5 rounded-2xl bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 shadow-sm ring-1 ring-slate-200/70"
-    >
+    <div class="panel-block">
       <div class="flex items-center justify-between">
         <div>
-          <div class="text-base font-semibold text-slate-800">近 7 天新增候选人</div>
-          <div class="mt-1 text-xs text-slate-500">候选人数量趋势</div>
+          <div class="text-base font-semibold text-strong">近 7 天新增候选人</div>
+          <div class="mt-1 text-xs text-desc">候选人数量趋势</div>
         </div>
-        <div v-if="loading" class="text-xs text-slate-400">加载中…</div>
+        <div v-if="loading" class="text-xs text-muted">加载中…</div>
       </div>
-      <div
-        ref="chartEl"
-        class="mt-4 w-full rounded-xl bg-white/70 backdrop-blur-sm"
-        style="height: 320px"
-      ></div>
+      <div ref="chartEl" class="mt-4 w-full" style="height: 320px"></div>
     </div>
   </div>
 </template>
@@ -93,7 +81,7 @@ const renderChart = () => {
         show: false,
       },
       axisLabel: {
-        color: '#64748B',
+        color: '#8b93a7',
       },
     },
     yAxis: {
@@ -107,12 +95,12 @@ const renderChart = () => {
       },
       splitLine: {
         lineStyle: {
-          color: '#E2E8F0',
+          color: 'rgba(255, 255, 255, 0.07)',
           type: 'dashed',
         },
       },
       axisLabel: {
-        color: '#64748B',
+        color: '#8b93a7',
       },
     },
     series: [
@@ -124,24 +112,24 @@ const renderChart = () => {
         showSymbol: false,
         lineStyle: {
           width: 3,
-          color: '#4F46E5',
-          shadowColor: 'rgba(79, 70, 229, 0.28)',
+          color: '#6799fe',
+          shadowColor: 'rgba(103, 153, 254, 0.35)',
           shadowBlur: 8,
         },
         itemStyle: {
-          color: '#4F46E5',
+          color: '#6799fe',
         },
         emphasis: {
           focus: 'series',
           itemStyle: {
-            borderColor: '#EEF2FF',
+            borderColor: '#d3dffe',
             borderWidth: 2,
           },
         },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(79, 70, 229, 0.25)' },
-            { offset: 1, color: 'rgba(79, 70, 229, 0.02)' },
+            { offset: 0, color: 'rgba(103, 153, 254, 0.32)' },
+            { offset: 1, color: 'rgba(103, 153, 254, 0.02)' },
           ]),
         },
       },
