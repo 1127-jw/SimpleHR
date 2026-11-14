@@ -18,7 +18,7 @@ from utils.time_ISO8601_datatime import now_beijing
 
 from app.schemas.candidate_schema import ResumeUploadRespSchema, ResumePaseSchema, ResumeParseTaskRespSchema, \
     TaskInfoSchema,CandidateCreateSchema
-from app.service.candidate_ser import resume_upload_service, parse_resume_service, create_candidate_ser
+from app.service.candidate_ser import resume_upload_service, parse_resume_service, create_candidate_ser, candidate_distribution_ser
 from app.service.candidate_status_ser import validate_transition, trigger_manual_retry, MANUAL_RETRY_SOURCES
 
 from redis.asyncio import Redis
@@ -258,6 +258,16 @@ async def get_candidate_ai_score(
         if not ai_score:
             raise HTTPException(status_code=400, detail="候选人的AI评分不存在！")
         return {"ai_score": ai_score}
+
+
+@router.get("/candidate/distribution", summary="候选人分布统计（学历/状态/职位）")
+async def get_candidate_distribution(
+    session:Annotated[AsyncSession, Depends(get_db)],
+    _: UserModel = Depends(get_current_user),
+):
+    """看板三个饼图的数据源，口径与「近 7 天新增候选人」一致（系统级总览）。"""
+    async with session.begin():
+        return await candidate_distribution_ser(session)
 
 
 @router.get("/candidate/7d", summary="获取最近7天系统中新增候选人的数量")

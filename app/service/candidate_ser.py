@@ -115,3 +115,51 @@ async def create_candidate_ser(
         interviewer_schema = UserSH.model_validate(candidate.position.creator)
 
     return candidate_schema, position_schema, interviewer_schema
+
+
+# 学历解析规则：按优先级从高到低匹配，命中即返回对应层级
+EDUCATION_RULES = [
+    ("博士", "博士"),
+    ("硕士", "硕士"),
+    ("研究生", "硕士"),
+    ("本科", "本科"),
+    ("学士", "本科"),
+    ("大专", "大专"),
+    ("专科", "大专"),
+    ("中专", "中专/高中"),
+    ("高中", "中专/高中"),
+]
+
+
+def parse_education(text: str | None) -> str:
+    """从教育经历自由文本里推断学历层级，推断不出来记为「未知」。"""
+    if not text:
+        return "未知"
+    for keyword, label in EDUCATION_RULES:
+        if keyword in text:
+            return label
+    return "未知"
+
+
+async def candidate_distribution_ser(session: AsyncSession) -> dict:
+    """看板三个饼图的数据：学历分布 / 状态分布 / 职位分布。"""
+    rows = await CandidateRepo(session).distribution_rows()
+
+    education: dict[str, int] = {}
+    status: dict[str, int] = {}
+    position: dict[str, int] = {}
+
+    for candidate_status, education_experience, position_title in rows:
+        edu_label = parse_education(education_experience)
+        education[edu_label] = education.get(edu_label, 0) + 1
+        status[candidate_status] = status.get(candidate_status, 0) + 1
+        position[position_title] = position.get(position_title, 0) + 1
+
+    def to_list(counts: dict[str, int]) -> list[dict]:
+        return [{"name": name, "value": value} for name, value in counts.items()]
+
+    return {
+        "education": to_list(education),
+        "status": to_list(status),
+        "position": to_list(position),
+    }
