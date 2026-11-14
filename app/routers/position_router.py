@@ -1,8 +1,7 @@
-from fastapi import Depends, APIRouter, HTTPException,Query,status
+from fastapi import Depends, APIRouter, Query
 # 类型注释
-from typing import Annotated, List
+from typing import Annotated
 from sqlalchemy.ext.asyncio import AsyncSession
-from redis.asyncio import Redis
 from app.models.user import UserModel
 # schema
 from app.schemas.position_schema import PositionCreateSchema, PositionUpdateSchema, PositionRespSchema, PositionListRespSchema
@@ -12,7 +11,7 @@ from app.repository.position_repo import PositionRepo
 from app.service import position_ser
 # core
 from app.core.db import get_db
-from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user, get_super_user
+from app.core.auth import get_current_user
 
 router = APIRouter(prefix="/position", tags=["position"])
 

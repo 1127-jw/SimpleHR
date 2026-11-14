@@ -20,7 +20,7 @@ from app.schemas.response_schema import ResponseSchema
 from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user, get_super_user
 from app.service import auth_ser
 from app.models.user import UserModel
-from app.service.email_ser import get_invite_code
+from app.service.auth_ser import get_invite_code
 from app.tasks.email_tasks import send_invite_email_task
 from app.repository.user_repo import DepartmentRepo
 from app.core.config import get_settings

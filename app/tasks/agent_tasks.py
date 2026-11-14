@@ -19,8 +19,6 @@ settings = get_settings()
 
 async def _mark_processing_error(candidate_id: str, error_msg: str) -> None:
     """将候选人状态标记为处理异常，并保存异常信息。
-
-    独立函数，确保即使主流程异常也能尽力更新状态。
     """
     try:
         async with AsyncSessionFactory() as session:

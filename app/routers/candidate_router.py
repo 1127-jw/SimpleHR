@@ -133,9 +133,8 @@ async def download_candidate_resume(
     session: Annotated[AsyncSession, Depends(get_db)],
     current_user: UserModel = Depends(get_current_user),
 ):
-    """需要登录，并且只能下载自己有权访问的候选人的简历。
-
-    简历属于敏感个人信息，取代了原先无鉴权的 ``/media`` 静态挂载。
+    """
+    需要登录，并且只能下载自己有权访问的候选人的简历。
     """
     async with session.begin():
         candidate = await CandidateRepo(session).get_for_user(candidate_id, current_user)
@@ -265,7 +264,7 @@ async def get_candidate_distribution(
     session:Annotated[AsyncSession, Depends(get_db)],
     _: UserModel = Depends(get_current_user),
 ):
-    """看板三个饼图的数据源，口径与「近 7 天新增候选人」一致（系统级总览）。"""
+    """看板三个饼图的数据源"""
     async with session.begin():
         return await candidate_distribution_ser(session)
 

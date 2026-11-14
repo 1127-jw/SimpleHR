@@ -233,9 +233,6 @@ class CandidateRepo(BaseRepo):
 
     async def distribution_rows(self) -> list[tuple[str, str | None, str]]:
         """看板聚合用：返回 (候选人状态, 教育经历文本, 职位名称)。
-
-        不做可见性过滤，与「近 7 天新增候选人」口径保持一致（系统级总览）。
-        学历需从 ``education_experience`` 自由文本里解析，因此这里返回原文。
         """
         stmt = (
             select(CandidateModel.status, CandidateModel.education_experience, PositionModel.title)
