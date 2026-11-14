@@ -82,7 +82,19 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        # 每个迁移使用独立事务。
+        #
+        # PostgreSQL 16 及更早版本不允许在「同一事务」中使用 ALTER TYPE ... ADD VALUE
+        # 刚添加的枚举值（报错 "unsafe use of new value ... of enum type ..."），
+        # 而 Alembic 默认把所有迁移包在一个事务里，导致 a1b2c3d4e5f6 添加的
+        # '人工通过/重试' 在 d4e5f6a7b8c9 的部分索引谓词中使用时仍未提交。
+        # 独立事务让枚举值在使用它的迁移开始前就已提交（PG 17+ 已放宽该限制，
+        # 但保持兼容 PG 16）。
+        transaction_per_migration=True,
+    )
 
     with context.begin_transaction():
         context.run_migrations()

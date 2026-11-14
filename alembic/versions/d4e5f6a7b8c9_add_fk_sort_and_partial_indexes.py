@@ -25,6 +25,16 @@ Create Date: 2026-11-13 00:00:00.000000
   ``ix_interviews_scheduled_time``，以及被新复合索引左缀覆盖的
   ``ix_candidates_position_id`` / ``ix_positions_department_id`` /
   ``ix_users_department_id``。
+
+注意
+----
+部分索引 ``ix_candidates_email_waiting`` 的谓词引用了枚举值
+``'人工通过/重试'``，该值由 ``a1b2c3d4e5f6`` 通过
+``ALTER TYPE ... ADD VALUE`` 添加。PostgreSQL 16 及更早版本不允许在同一
+事务中使用尚未提交的枚举值（报错 ``unsafe use of new value``），而 Alembic
+默认把所有迁移包在一个事务里。因此 ``alembic/env.py`` 必须设置
+``transaction_per_migration=True``（每个迁移独立提交），否则在全新库上
+执行 ``alembic upgrade head`` 会失败（CI 的 postgres:16 即为此场景）。
 """
 from typing import Sequence, Union
 

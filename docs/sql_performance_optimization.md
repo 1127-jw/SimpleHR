@@ -346,6 +346,7 @@ SELECT * FROM dingding_user WHERE user_id = 'user_1';
 | 文件 | 改动 |
 |---|---|
 | [alembic/versions/d4e5f6a7b8c9_add_fk_sort_and_partial_indexes.py](../alembic/versions/d4e5f6a7b8c9_add_fk_sort_and_partial_indexes.py) | 新增迁移（含 downgrade） |
+| [alembic/env.py](../alembic/env.py) | 设置 `transaction_per_migration=True`，修复 PG 16 枚举限制导致的 CI 失败 |
 | [app/models/candidate.py](../app/models/candidate.py) | 复合/部分/唯一索引；`creator_id` 加索引；移除 `phone_number`/`position_id`/`email_invite_sent_at` 单列索引 |
 | [app/models/position.py](../app/models/position.py) | 新增部门+时间、纯时间索引 |
 | [app/models/user.py](../app/models/user.py) | `hr_managed_departments` 反向索引、`users` 部门+时间索引、`dingding_user.user_id` 索引 |
@@ -361,6 +362,30 @@ SELECT * FROM dingding_user WHERE user_id = 'user_1';
 - 迁移在独立库 `hr_bench` 应用成功，`alembic check` → `No new upgrade operations detected`（模型与库一致）
 - `downgrade` → `upgrade` 回滚/重放成功
 - 全量测试通过（`pytest` 退出码 0）
+
+### 6.1 CI 兼容性修复（PostgreSQL 16 枚举限制）
+
+CI 的 `postgres:16-alpine` 曾在「初始化数据库（迁移 + 种子数据）」步骤失败。
+根因是 Alembic 默认把**所有迁移包在一个事务**里执行，而 `d4e5f6a7b8c9` 的
+部分索引谓词使用了 `a1b2c3d4e5f6` 刚通过 `ALTER TYPE ... ADD VALUE` 添加的
+枚举值 `'人工通过/重试'`。PostgreSQL 16 及更早版本不允许在同一事务中使用尚未
+提交的枚举值：
+
+```
+ERROR: unsafe use of new value "人工通过/重试" of enum type candidatestatusenum
+HINT: New enum values must be committed before they can be used.
+```
+
+PG 17 起才放宽该限制（见 [PostgreSQL 提交 af1d395](https://git.postgresql.org/cgit/postgresql.git/commit/src/backend/catalog/pg_enum.c?id=af1d3958432c9438c4ec168bd16bdf9a91066a9f)），
+而 CI 使用 PG 16，因此全新库执行 `alembic upgrade head` 会失败（生产库因枚举值
+早已提交而不受影响）。
+
+**修复**：在 [alembic/env.py](../alembic/env.py) 的 `context.configure()` 中设置
+`transaction_per_migration=True`，让每个迁移独立提交。这样枚举值在使用它的
+迁移开始前就已提交，兼容 PostgreSQL 16+。
+
+**验证**：在迁移开头临时插入 `pg_sleep`，从另一会话查询 `pg_enum`，确认
+`'人工通过/重试'` 在后续迁移执行前已可见（即已提交）。
 
 ---
 
