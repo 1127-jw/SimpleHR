@@ -43,10 +43,9 @@ async def create_user(
     redis_inviter_department_id = await r.get(f"inviter_department_id:{user_email}")
     # 2 开启事务
     async with session.begin():
-        # 2.1 get user 检查邮箱是否已经被注册
+        # 2.1 get user 检查邮箱是否已经被注册（轻量判重，不加载关联）
         user_repo = UserRepo(session)
-        user: Optional[UserModel] = await user_repo.get_by_email(user_email)
-        if user:
+        if await user_repo.exists_by_email(user_email):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST ,detail="user already exists")
         # 2.2 create user
         user = await user_repo.create_user({

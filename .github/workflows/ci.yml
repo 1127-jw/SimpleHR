@@ -170,3 +170,42 @@ jobs:
           curl -sf http://127.0.0.1:8000/ > /dev/null || { echo "❌ 应用启动失败"; exit 1; }
 
           uv run python scripts/ci/smoke.py
+
+  # ==================== CD：部署到服务器 ====================
+  # 三个检查 Job 全部通过后，SSH 到服务器执行部署脚本。
+  deploy:
+    name: 部署到服务器
+    needs: [backend, frontend, smoke]
+    # 只在 master 分支部署：push 自动部署；也允许手动触发（补部署/回滚）
+    if: |
+      github.ref == 'refs/heads/master' && (
+        github.event_name == 'push' ||
+        github.event_name == 'workflow_dispatch'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 SSH 密钥
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: 上传部署脚本
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new \
+              "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+              'install -d -m 755 /opt/simplejob/simple-hr/scripts'
+          ssh -o StrictHostKeyChecking=accept-new \
+              "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+              'cat > /opt/simplejob/simple-hr/scripts/deploy.sh && chmod +x /opt/simplejob/simple-hr/scripts/deploy.sh' \
+              < scripts/deploy.sh
+
+      - name: 执行部署
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new \
+              "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+              '/opt/simplejob/simple-hr/scripts/deploy.sh'

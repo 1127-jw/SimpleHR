@@ -83,8 +83,8 @@ async def init_users() -> tuple[int, int]:
                 department_ids[name] = department.id
 
             for user in USERS:
-                existing = await user_repo.get_by_email(user["email"]) or \
-                    await user_repo.get_by_username(user["username"])
+                existing = await user_repo.exists_by_email(user["email"]) or \
+                    await user_repo.exists_by_username(user["username"])
                 if existing:
                     skipped += 1
                     continue

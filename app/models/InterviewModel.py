@@ -19,14 +19,14 @@ class InterviewResultEnum(StrEnum):
 class InterviewModel(BaseModel):
     __tablename__ = "interviews"
 
-    scheduled_time: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
+    scheduled_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
     feedback: Mapped[Optional[str]] = mapped_column(Text)
     result: Mapped[Optional[InterviewResultEnum]] = mapped_column(
         Enum(InterviewResultEnum, native_enum=False, length=20)
     )
 
     candidate_id: Mapped[str] = mapped_column(ForeignKey("candidates.id"), unique=True)
-    interviewer_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    interviewer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
 
     candidate: Mapped["CandidateModel"] = relationship(back_populates="interviews")
     interviewer: Mapped["UserModel"] = relationship()

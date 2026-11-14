@@ -145,12 +145,9 @@ class CandidateRepo(BaseRepo):
 
         stmt = stmt.join(PositionModel)
         if current_user.is_hr:
-            hr_user = await self.session.scalar(
-                select(UserModel)
-                .where(UserModel.id == current_user.id)
-                .options(selectinload(UserModel.managed_departments))
-            )
-            department_ids = [d.id for d in hr_user.managed_departments]
+            # get_current_user 已通过 user_eager_options 预加载 managed_departments，
+            # 直接复用，避免同一请求内重复查询用户与部门关系
+            department_ids = [d.id for d in current_user.managed_departments]
             if not department_ids:
                 # 没有负责部门：用恒假条件代替「提前 return []」，保证 count 也是 0
                 return stmt.where(CandidateModel.id.is_(None))

@@ -46,6 +46,16 @@ class UserRepo(BaseRepo):
         user = await self.session.scalar(stmt)
         return user
 
+    async def exists_by_email(self, email: str) -> bool:
+        """轻量判重：只取 id，不加载任何关联（注册判重场景用）。"""
+        stmt = select(UserModel.id).where(UserModel.email == email).limit(1)
+        return (await self.session.scalar(stmt)) is not None
+
+    async def exists_by_username(self, username: str) -> bool:
+        """轻量判重：只取 id，不加载任何关联（注册判重场景用）。"""
+        stmt = select(UserModel.id).where(UserModel.username == username).limit(1)
+        return (await self.session.scalar(stmt)) is not None
+
     async def get_user_list(
             self,
             page: int = 1,
@@ -63,7 +73,10 @@ class UserRepo(BaseRepo):
 
         offset = (page - 1) * size
         users = await self.session.scalars(
-            stmt.options(selectinload(UserModel.department)).offset(offset).limit(size)
+            stmt.options(selectinload(UserModel.department))
+            .order_by(UserModel.created_at.desc())
+            .offset(offset)
+            .limit(size)
         )
         return list(users.all()), total
 

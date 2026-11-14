@@ -2,7 +2,7 @@ import enum
 from typing import List, Optional
 from pwdlib import PasswordHash
 
-from sqlalchemy import String, Boolean, Enum as SEnum, ForeignKey, Table, Column, Integer
+from sqlalchemy import String, Boolean, Enum as SEnum, ForeignKey, Table, Column, Integer, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import BaseModel, Base
@@ -22,11 +22,18 @@ hr_managed_departments = Table(
     Base.metadata,
     Column("user_id", ForeignKey("users.id"), primary_key=True),
     Column("department_id", ForeignKey("departments.id"), primary_key=True),
+    # 反向按部门查 HR（主键是 (user_id, department_id)，department_id 不在最左）
+    Index("ix_hr_managed_departments_department_id", "department_id"),
 )
 
 #用户模型
 class UserModel(BaseModel):
     __tablename__ = "users"
+
+    # 用户列表：按部门过滤 + 按创建时间倒序（主键之外的稳定分页顺序）
+    __table_args__ = (
+        Index("ix_users_department_created", "department_id", "created_at"),
+    )
 
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     _password: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -34,7 +41,7 @@ class UserModel(BaseModel):
     phone_number: Mapped[Optional[str]] = mapped_column(String(20), unique=True, index=True)
     realname: Mapped[str] = mapped_column(String(50), nullable=False)
     avatar: Mapped[Optional[str]] = mapped_column(String(255))
-    department_id: Mapped[Optional[str]] = mapped_column(ForeignKey("departments.id"), index=True)
+    department_id: Mapped[Optional[str]] = mapped_column(ForeignKey("departments.id"))
     status: Mapped[UserStatus] = mapped_column(SEnum(UserStatus), default=UserStatus.ACTIVE)
     is_hr: Mapped[bool] = mapped_column(Boolean, default=False)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -97,5 +104,5 @@ class DingdingUserModel(BaseModel):
     # # refresh_token的过期时间，保存的是时间戳
     # refresh_token_expire_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     user: Mapped["UserModel"] = relationship(back_populates="dingding_user")

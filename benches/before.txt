@@ -1,0 +1,215 @@
+### 01_dingding_user_by_user_id
+SELECT * FROM dingding_user WHERE user_id = 'user_1';
+
+Seq Scan on dingding_user  (cost=0.00..1383.00 rows=10 width=77) (actual time=0.255..2.629 rows=10.00 loops=1)
+  Filter: ((user_id)::text = 'user_1'::text)
+  Rows Removed by Filter: 49990
+  Buffers: shared hit=758
+Planning:
+  Buffers: shared hit=63
+Planning Time: 0.245 ms
+Execution Time: 2.637 ms
+
+### 02_candidates_by_resume_id
+SELECT * FROM candidates WHERE resume_id = 'res_12345';
+
+Seq Scan on candidates  (cost=0.00..4106.00 rows=1 width=401) (actual time=10.554..12.608 rows=1.00 loops=1)
+  Filter: ((resume_id)::text = 'res_12345'::text)
+  Rows Removed by Filter: 99999
+  Buffers: shared hit=2116 read=740 written=241
+Planning:
+  Buffers: shared hit=113 read=3
+Planning Time: 0.417 ms
+Execution Time: 12.613 ms
+
+### 03_candidates_by_creator_id
+SELECT * FROM candidates WHERE creator_id = 'user_500';
+
+Seq Scan on candidates  (cost=0.00..4106.00 rows=20 width=401) (actual time=0.436..8.049 rows=20.00 loops=1)
+  Filter: ((creator_id)::text = 'user_500'::text)
+  Rows Removed by Filter: 99980
+  Buffers: shared hit=2856
+Planning Time: 0.035 ms
+Execution Time: 8.054 ms
+
+### 04_interviews_by_interviewer_id
+SELECT * FROM interviews WHERE interviewer_id = 'user_500';
+
+Seq Scan on interviews  (cost=0.00..2386.00 rows=20 width=90) (actual time=0.025..4.323 rows=20.00 loops=1)
+  Filter: ((interviewer_id)::text = 'user_500'::text)
+  Rows Removed by Filter: 99980
+  Buffers: shared hit=1136
+Planning:
+  Buffers: shared hit=49
+Planning Time: 0.205 ms
+Execution Time: 4.327 ms
+
+### 05_candidates_list_by_position_order
+SELECT * FROM candidates WHERE position_id = 'pos_1' ORDER BY created_at DESC LIMIT 20;
+
+Limit  (cost=4034.35..4034.40 rows=20 width=401) (actual time=2.805..2.807 rows=20.00 loops=1)
+  Buffers: shared hit=420 read=15 written=14
+  ->  Sort  (cost=4034.35..4083.54 rows=19677 width=401) (actual time=2.805..2.806 rows=20.00 loops=1)
+        Sort Key: created_at DESC
+        Sort Method: top-N heapsort  Memory: 31kB
+        Buffers: shared hit=420 read=15 written=14
+        ->  Bitmap Heap Scan on candidates  (cost=408.79..3510.75 rows=19677 width=401) (actual time=0.639..1.579 rows=20004.00 loops=1)
+              Recheck Cond: ((position_id)::text = 'pos_1'::text)
+              Heap Blocks: exact=418
+              Buffers: shared hit=420 read=15 written=14
+              ->  Bitmap Index Scan on ix_candidates_position_id  (cost=0.00..403.87 rows=19677 width=0) (actual time=0.614..0.614 rows=20004.00 loops=1)
+                    Index Cond: ((position_id)::text = 'pos_1'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=2 read=15 written=14
+Planning:
+  Buffers: shared hit=19 read=2 written=2
+Planning Time: 0.117 ms
+Execution Time: 2.825 ms
+
+### 06_candidates_list_no_filter_order
+SELECT * FROM candidates ORDER BY created_at DESC LIMIT 20;
+
+Limit  (cost=6009.53..6011.81 rows=20 width=401) (actual time=61.467..64.220 rows=20.00 loops=1)
+  Buffers: shared hit=2897 read=1
+  ->  Gather Merge  (cost=6009.53..17406.70 rows=100001 width=401) (actual time=61.466..64.218 rows=20.00 loops=1)
+        Workers Planned: 1
+        Workers Launched: 1
+        Buffers: shared hit=2897 read=1
+        ->  Sort  (cost=5009.52..5156.58 rows=58824 width=401) (actual time=5.464..5.465 rows=10.00 loops=2)
+              Sort Key: created_at DESC
+              Sort Method: top-N heapsort  Memory: 30kB
+              Buffers: shared hit=2897 read=1
+              Worker 0:  Sort Method: quicksort  Memory: 25kB
+              ->  Parallel Seq Scan on candidates  (cost=0.00..3444.24 rows=58824 width=401) (actual time=0.002..1.952 rows=50000.00 loops=2)
+                    Buffers: shared hit=2856
+Planning Time: 0.036 ms
+Execution Time: 64.238 ms
+
+### 07_positions_list_by_department_order
+SELECT * FROM positions WHERE department_id = 'dep_1' ORDER BY created_at DESC LIMIT 10;
+
+Limit  (cost=571.21..571.24 rows=10 width=145) (actual time=0.622..0.623 rows=10.00 loops=1)
+  Buffers: shared hit=90 read=1
+  ->  Sort  (cost=571.21..583.75 rows=5015 width=145) (actual time=0.621..0.622 rows=10.00 loops=1)
+        Sort Key: created_at DESC
+        Sort Method: top-N heapsort  Memory: 26kB
+        Buffers: shared hit=90 read=1
+        ->  Bitmap Heap Scan on positions  (cost=115.15..462.84 rows=5015 width=145) (actual time=0.112..0.347 rows=5015.00 loops=1)
+              Recheck Cond: ((department_id)::text = 'dep_1'::text)
+              Heap Blocks: exact=86
+              Buffers: shared hit=90 read=1
+              ->  Bitmap Index Scan on ix_positions_department_id  (cost=0.00..113.90 rows=5015 width=0) (actual time=0.098..0.098 rows=5015.00 loops=1)
+                    Index Cond: ((department_id)::text = 'dep_1'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=4 read=1
+Planning:
+  Buffers: shared hit=71
+Planning Time: 0.334 ms
+Execution Time: 0.634 ms
+
+### 08_positions_list_no_filter_order
+SELECT * FROM positions ORDER BY created_at DESC LIMIT 10;
+
+Limit  (cost=917.19..917.22 rows=10 width=145) (actual time=1.711..1.712 rows=10.00 loops=1)
+  Buffers: shared hit=285
+  ->  Sort  (cost=917.19..967.19 rows=20000 width=145) (actual time=1.710..1.711 rows=10.00 loops=1)
+        Sort Key: created_at DESC
+        Sort Method: top-N heapsort  Memory: 26kB
+        Buffers: shared hit=285
+        ->  Seq Scan on positions  (cost=0.00..485.00 rows=20000 width=145) (actual time=0.003..0.653 rows=20000.00 loops=1)
+              Buffers: shared hit=285
+Planning Time: 0.022 ms
+Execution Time: 1.717 ms
+
+### 09_users_list_by_department_order
+SELECT * FROM users WHERE department_id = 'dep_1' ORDER BY created_at DESC LIMIT 10;
+
+Limit  (cost=20.74..20.75 rows=5 width=606) (actual time=0.018..0.019 rows=5.00 loops=1)
+  Buffers: shared hit=7
+  ->  Sort  (cost=20.74..20.75 rows=5 width=606) (actual time=0.018..0.018 rows=5.00 loops=1)
+        Sort Key: created_at DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=7
+        ->  Bitmap Heap Scan on users  (cost=4.32..20.68 rows=5 width=606) (actual time=0.011..0.014 rows=5.00 loops=1)
+              Recheck Cond: ((department_id)::text = 'dep_1'::text)
+              Heap Blocks: exact=5
+              Buffers: shared hit=7
+              ->  Bitmap Index Scan on ix_users_department_id  (cost=0.00..4.32 rows=5 width=0) (actual time=0.006..0.006 rows=5.00 loops=1)
+                    Index Cond: ((department_id)::text = 'dep_1'::text)
+                    Index Searches: 1
+                    Buffers: shared hit=2
+Planning:
+  Buffers: shared hit=80
+Planning Time: 0.313 ms
+Execution Time: 0.025 ms
+
+### 10_stale_email_waiters
+SELECT * FROM candidates WHERE status IN ('AI筛选成功', '人工通过/重试') AND email_invite_sent_at IS NOT NULL AND email_invite_sent_at <= '2026-01-02 00:00:00' ORDER BY email_invite_sent_at ASC LIMIT 200;
+
+Limit  (cost=306.59..306.71 rows=48 width=401) (actual time=0.264..0.267 rows=45.00 loops=1)
+  Buffers: shared hit=20 read=14
+  ->  Sort  (cost=306.59..306.71 rows=48 width=401) (actual time=0.263..0.265 rows=45.00 loops=1)
+        Sort Key: email_invite_sent_at
+        Sort Method: quicksort  Memory: 36kB
+        Buffers: shared hit=20 read=14
+        ->  Bitmap Heap Scan on candidates  (cost=131.20..305.25 rows=48 width=401) (actual time=0.247..0.257 rows=45.00 loops=1)
+              Recheck Cond: ((email_invite_sent_at IS NOT NULL) AND (email_invite_sent_at <= '2026-01-02 00:00:00'::timestamp without time zone) AND (status = ANY ('{AI筛选成功,人工通过/重试}'::candidatestatusenum[])))
+              Heap Blocks: exact=15
+              Buffers: shared hit=20 read=14
+              ->  BitmapAnd  (cost=131.20..131.20 rows=48 width=0) (actual time=0.241..0.242 rows=0.00 loops=1)
+                    Buffers: shared hit=5 read=14
+                    ->  Bitmap Index Scan on ix_candidates_email_invite_sent_at  (cost=0.00..60.45 rows=1203 width=0) (actual time=0.088..0.088 rows=1368.00 loops=1)
+                          Index Cond: ((email_invite_sent_at IS NOT NULL) AND (email_invite_sent_at <= '2026-01-02 00:00:00'::timestamp without time zone))
+                          Index Searches: 1
+                          Buffers: shared hit=1 read=9
+                    ->  Bitmap Index Scan on ix_candidates_status  (cost=0.00..70.48 rows=3987 width=0) (actual time=0.152..0.152 rows=4000.00 loops=1)
+                          Index Cond: (status = ANY ('{AI筛选成功,人工通过/重试}'::candidatestatusenum[]))
+                          Index Searches: 2
+                          Buffers: shared hit=4 read=5
+Planning:
+  Buffers: shared hit=6
+Planning Time: 0.079 ms
+Execution Time: 0.279 ms
+
+### 11_candidate_count_7d
+SELECT date(created_at), count(id) FROM candidates WHERE created_at >= now() - interval '7 days' AND created_at <= now() GROUP BY date(created_at) ORDER BY date(created_at);
+
+GroupAggregate  (cost=5794.70..5994.52 rows=9991 width=12) (actual time=19.487..20.161 rows=8.00 loops=1)
+  Group Key: (date(created_at))
+  Buffers: shared hit=2859
+  ->  Sort  (cost=5794.70..5819.68 rows=9991 width=14) (actual time=19.430..19.631 rows=10079.00 loops=1)
+        Sort Key: (date(created_at))
+        Sort Method: quicksort  Memory: 699kB
+        Buffers: shared hit=2859
+        ->  Seq Scan on candidates  (cost=0.00..5130.98 rows=9991 width=14) (actual time=12.155..18.899 rows=10079.00 loops=1)
+              Filter: ((created_at <= now()) AND (created_at >= (now() - '7 days'::interval)))
+              Rows Removed by Filter: 89921
+              Buffers: shared hit=2856
+Planning:
+  Buffers: shared hit=23
+Planning Time: 0.074 ms
+Execution Time: 20.252 ms
+
+### 12_candidate_ai_score_by_candidate_id
+SELECT * FROM candidate_ai_scores WHERE candidate_id = 'cand_12345';
+
+Index Scan using ix_candidate_ai_scores_candidate_id on candidate_ai_scores  (cost=0.42..8.44 rows=1 width=75) (actual time=0.010..0.010 rows=1.00 loops=1)
+  Index Cond: ((candidate_id)::text = 'cand_12345'::text)
+  Index Searches: 1
+  Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=57
+Planning Time: 0.122 ms
+Execution Time: 0.015 ms
+
+### 13_hr_managed_departments_by_department_id
+SELECT * FROM hr_managed_departments WHERE department_id = 'dep_1';
+
+Seq Scan on hr_managed_departments  (cost=0.00..94.50 rows=5 width=16) (actual time=0.037..0.169 rows=5.00 loops=1)
+  Filter: ((department_id)::text = 'dep_1'::text)
+  Rows Removed by Filter: 4995
+  Buffers: shared hit=32
+Planning:
+  Buffers: shared hit=17
+Planning Time: 0.113 ms
+Execution Time: 0.172 ms
