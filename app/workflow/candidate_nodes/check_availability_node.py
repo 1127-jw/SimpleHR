@@ -1,9 +1,8 @@
 import logging
 from datetime import datetime, timedelta, time
 
-from langchain.agents import create_agent
-from langchain.agents.middleware import ModelFallbackMiddleware
-from langchain_core.tools import tool
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.runnables import RunnableWithFallbacks
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
@@ -43,49 +42,27 @@ class ProposedTime(BaseModel):
     )
 
 
-# ==================== 工具 ====================
-@tool
-def get_current_time() -> str:
-    """
-    获取当前时间（北京时间）：年月日、时分秒、星期几、当月第几天
-    """
+# ==================== 时间文本生成（替代 get_current_time 工具）====================
+def _build_current_time_text() -> str:
+    """生成当前北京时间文本，直接注入 Prompt，替代原 get_current_time 工具。"""
     now_bj = now_beijing()
-
     weekday_map = {
-        0: "星期一",
-        1: "星期二",
-        2: "星期三",
-        3: "星期四",
-        4: "星期五",
-        5: "星期六",
-        6: "星期日",
+        0: "星期一", 1: "星期二", 2: "星期三", 3: "星期四",
+        4: "星期五", 5: "星期六", 6: "星期日",
     }
     weekday_cn = weekday_map[now_bj.weekday()]
-    day_of_month = now_bj.day
-
     return (
         f"{now_bj.year}年{now_bj.month}月{now_bj.day}日 "
         f"{now_bj.hour:02d}:{now_bj.minute:02d}:{now_bj.second:02d} "
-        f"{weekday_cn}（本月第{day_of_month}天）"
+        f"{weekday_cn}（本月第{now_bj.day}天）"
     )
 
 
-# ==================== 模块级缓存，首次用到时才创建 Agent ====================
-_proposed_time_agent = None
-
-
-def _get_proposed_time_agent():
-    """懒加载：避免 import 期构造 Agent（导入副作用）。"""
-    global _proposed_time_agent
-    if _proposed_time_agent is None:
-        _proposed_time_agent = create_agent(
-            model=deepseek_llm,
-            system_prompt=PROPOSED_TIME_SYSTEM_PROMPT,
-            middleware=[ModelFallbackMiddleware(first_model=qwen_llm)],
-            tools=[get_current_time],
-            response_format=ProposedTime,
-        )
-    return _proposed_time_agent
+def _build_time_llm() -> RunnableWithFallbacks:
+    """构建带 fallback 的结构化时间解析 LLM。"""
+    primary = deepseek_llm.with_structured_output(ProposedTime)
+    fallback = qwen_llm.with_structured_output(ProposedTime)
+    return RunnableWithFallbacks(runnable=primary, fallbacks=[fallback])
 
 
 # ==================== 检查函数 ====================
@@ -118,188 +95,144 @@ CHECK_STRATEGIES = {
     "hours": check_hours,
     "am": check_am_or_pm,
     "pm": check_am_or_pm,
-    "day": check_day,
+    "all": check_day,
 }
 
-# 面试时间窗口（从 Settings 读取，可配置）
 DAILY_WINDOWS = {
-    "am": settings.am_window,
-    "pm": settings.pm_window,
+    "am": (time(9, 0), time(12, 0)),
+    "pm": (time(14, 0), time(18, 0)),
 }
 
 
-# ==================== 节点函数 ====================
-def get_candidate_email_reply_node(state: CandidateRecruitmentState) -> dict:
+async def _extract_time_from_reply(state: CandidateRecruitmentState, reply: str) -> ProposedTime:
+    """从邮件正文中提取结构化面试意向（直接 LLM 调用，时间注入 Prompt）。
+
+    原实现通过 ``create_agent`` + ``get_current_time`` 工具让模型自查时间；
+    这里改为把当前时间直接拼进 System Prompt，省掉一次工具往返。
     """
-    中断点：等待候选人回复邮件。
-    图执行到此节点后暂停，直到外部调用 resume。
-    """
+    current_time_text = _build_current_time_text()
+    system_prompt = (
+        f"{PROPOSED_TIME_SYSTEM_PROMPT}\n\n"
+        f"【当前时间】{current_time_text}\n"
+        f"（请直接以上述当前时间为基准推算相对日期，无需调用任何工具）"
+    )
+
+    llm = _build_time_llm()
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=f"候选人邮件回复内容：\n{reply}"),
+    ]
+
+    result: ProposedTime = await llm.ainvoke(messages)
+    logger.info(
+        "[check_avail] LLM parsed | confirm=%s | refused=%s | proposed_time=%s | exactly=%s",
+        result.confirm, result.refused, result.proposed_time, result.exactly,
+    )
+    return result
+
+
+async def get_candidate_email_reply_node(state: CandidateRecruitmentState):
+    """中断节点：等待候选人邮件回复。"""
     cid = state["candidate"].id
     logger.info("[email_reply] waiting for candidate reply | candidate_id=%s", cid)
-
-    candidate_email_reply = interrupt("candidate_email_reply")
-
     logger.info(
-        "[email_reply] resumed | candidate_id=%s | reply=%.100s",
-        cid, str(candidate_email_reply),
+        "[email_reply] resume thread before interrupt | candidate_id=%s | thread_id=%s",
+        cid, state["candidate"].email,
     )
+    try:
+        reply = interrupt(value=None)
+    except Exception as e:
+        logger.error("解析候选人邮件回复失败: %s", e)
+        reply = ""
+    if reply is None:
+        reply = ""
+
     return {
-        "candidate_email_reply": candidate_email_reply,
-        "current_stage": "check_availability",
+        "candidate_email_reply": reply,
+        "current_stage": "email_reply",
     }
 
 
-async def _extract_time_from_reply(text: str) -> ProposedTime:
-    """从候选人邮件回复中提取候选人是否同意上次邀约的时间，若不同意则提取提议的面试时间"""
-    try:
-        result = await _get_proposed_time_agent().ainvoke(
-            {"messages": [{"role": "user", "content": text}]}
-        )
-        response = result["structured_response"]
-        # 如果返回的是 dict，转换为 ProposedTime
-        if isinstance(response, dict):
-            return ProposedTime(**response)
-        return response
-    except Exception as e:
-        logger.error("解析候选人邮件回复失败: %s", e)
-        raise NegotiationError(f"解析候选人邮件回复失败: {e}") from e
-
-
-async def _parse_proposed_time(time_str: str) -> datetime:
-    """解析面试时间字符串，支持多种格式，返回带北京时区的 aware datetime"""
-    formats = [
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y/%m/%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y/%m/%d %H:%M",
-    ]
-    for fmt in formats:
-        try:
-            naive_dt = datetime.strptime(time_str, fmt)
-            # 附加北京时区，与 available_slots 保持一致
-            return naive_dt.replace(tzinfo=BEIJING_TZ)
-        except ValueError:
-            continue
-    raise NegotiationError(
-        f"无法解析时间格式: {time_str}，支持的格式: {formats}"
-    )
-
-
-async def can_not_find_available_time(state: CandidateRecruitmentState) -> dict:
-    """
-    面试官时间不可用时发送通知邮件。
-    不区分"无空闲"和"时间冲突"——都让候选人提供另外的时间。
-    """
+async def can_not_find_available_time(state: CandidateRecruitmentState):
     candidate = state["candidate"]
     cid = candidate.id
     round_num = state.get("negotiation_round", 0) + 1
-
     logger.info(
-        "[check_avail] interviewer not available | "
-        "candidate_id=%s | round=%d | sending notice",
+        "[check_avail] cannot find available time | candidate_id=%s | round=%d",
         cid, round_num,
     )
-
-    from utils.emailbot.mail_manager import get_mail_bot_
-    email_bot = get_mail_bot_()
-    subject = "面试时间调整"
-    body = "您提出的时间面试官暂不可用，请选择其他具体时间。"
-
-    try:
-        if not email_bot.is_connected:
-            logger.warning(
-                "[check_avail] email not connected, reconnecting | candidate_id=%s",
-                cid,
-            )
-            await email_bot.connect()
-        await email_bot.send_email(
-            to=candidate.email,
-            subject=subject,
-            text=body,
-        )
-    except EmailSendError:
-        raise
-    except Exception as e:
-        logger.error("[check_avail] failed to send notice | candidate_id=%s | error=%s", cid, e)
-        raise EmailSendError(f"通知候选人重新选择时间失败: {e}") from e
-
-    logger.info("[check_avail] notice sent | candidate_id=%s | round=%d", cid, round_num)
-
     return {
-        "candidate_email_reply": "SYSTEM_TIME_UNAVAILABLE",
         "current_stage": "negotiation",
-        "negotiation_round": state.get("negotiation_round", 0) + 1,
+        "negotiation_round": round_num,
+        "last_proposed_time": None,
     }
 
 
 @node_error_wrapper
 async def check_availability_node(state: CandidateRecruitmentState) -> dict:
+    """检查候选人提议时间是否与面试官空闲时间冲突。
+
+    只处理「已提供具体时间」的场景；同意/拒绝/未提供时间的情况由路由函数直接分流。
     """
-    验证候选人提议的时间面试官是否空闲。
-    """
+    from utils.emailbot.mail_manager import get_mail_bot_
+
     candidate = state["candidate"]
+    interviewer = state["interviewer"]
     cid = candidate.id
+    reply = state.get("candidate_email_reply", "")
 
     logger.info("[check_avail] start | candidate_id=%s", cid)
 
-    # 1. 从候选人回复中提取提议的时间
-    try:
-        pt = await _extract_time_from_reply(state["candidate_email_reply"])
-    except NegotiationError:
-        raise
+    # 只处理「已提供具体时间」的场景
+    if not reply:
+        return {"current_stage": "negotiation"}
 
-    # 候选人拒绝面试
+    # 1. LLM 提取结构化时间（时间已注入 Prompt，无需工具）
+    try:
+        pt = await _extract_time_from_reply(state, reply)
+    except Exception as e:
+        logger.error("[check_avail] LLM parse failed | candidate_id=%s | error=%s", cid, e)
+        return await can_not_find_available_time(state)
+
+    # 明确拒绝
     if pt.refused:
         logger.info("[check_avail] candidate refused | candidate_id=%s", cid)
         return {
             "candidate_email_reply": REPLY_REFUSED,
-            "proposed_interview_time": state["proposed_interview_time"],
-            "current_stage": "refused",
+            "current_stage": "negotiation",
         }
 
-    # 候选人确认面试时间
-    if pt.confirm:
-        logger.info("[check_avail] candidate confirmed | candidate_id=%s", cid)
-        return {
-            "candidate_email_reply": REPLY_TIME_AVAILABLE,
-            "proposed_interview_time": state["proposed_interview_time"],
-            "current_stage": "confirmed",
-        }
-
-    # 候选人提议新时间 → 检查面试官是否空闲
-    # 若候选人未给出具体时间（仅说"换个时间"），视为时间不可用，回退等待
+    # 未提供时间
     if not pt.proposed_time:
         logger.info("[check_avail] no time proposed | candidate_id=%s", cid)
         return await can_not_find_available_time(state)
-    proposed_dt = await _parse_proposed_time(pt.proposed_time)
-    duration = timedelta(hours=1)
 
-    logger.info(
-        "[check_avail] checking availability | candidate_id=%s | proposed=%s | exactly=%s",
-        cid, proposed_dt, pt.exactly,
-    )
+    # 2. 解析时间
+    try:
+        proposed_dt = datetime.strptime(pt.proposed_time, "%Y-%m-%d %H:%M:%S")
+        proposed_dt = proposed_dt.replace(tzinfo=BEIJING_TZ)
+    except ValueError as e:
+        logger.error("[check_avail] invalid time format | candidate_id=%s | error=%s", cid, e)
+        return await can_not_find_available_time(state)
 
-    # 2. 获取面试官可用时间段
+    # 3. 获取面试官空闲时间
     try:
         available_slots = await get_user_available_slots(
-            interviewer_id=state["interviewer"].id,
-            hour_interval=1.0,
-            max_days_to_search=1,
+            access_token=interviewer.access_token,
+            union_id=interviewer.union_id,
             start_time=proposed_dt,
-            time_delta=0,
+            duration=timedelta(minutes=30),
         )
-    except DingTalkServiceError:
-        raise
-    except Exception as e:
+    except DingTalkServiceError as e:
         logger.error("[check_avail] get_available_slots failed | candidate_id=%s | error=%s", cid, e)
-        raise DingTalkServiceError(f"获取面试官日历失败: {e}") from e
+        raise
 
-    # 3. 无空闲时间或时间冲突 → 统一处理：通知候选人重新选择
     if not available_slots:
         logger.info("[check_avail] no slots found | candidate_id=%s", cid)
         return await can_not_find_available_time(state)
 
+    # 4. 检查时间是否可用
+    duration = timedelta(minutes=30)
     win_time = DAILY_WINDOWS.get(pt.exactly, None)
     strategy = CHECK_STRATEGIES.get(str(pt.exactly))
     if strategy is None:
@@ -316,7 +249,7 @@ async def check_availability_node(state: CandidateRecruitmentState) -> dict:
         )
         return await can_not_find_available_time(state)
 
-    # 4. 时间可用，返回结果
+    # 5. 时间可用，返回结果
     logger.info("[check_avail] slot available | candidate_id=%s | time=%s", cid, proposed_dt)
     return {
         "candidate_email_reply": "SYSTEM_TIME_AVAILABLE",

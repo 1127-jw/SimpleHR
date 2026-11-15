@@ -1,8 +1,7 @@
 import logging
 
-from langchain.agents import create_agent
-from langchain.agents.middleware import ModelFallbackMiddleware
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.runnables import RunnableWithFallbacks
 
 from app.agents.llms import deepseek_llm, qwen_llm
 from app.agents.prompts import (
@@ -21,32 +20,35 @@ from app.workflow.error_handler import node_error_wrapper
 settings = get_settings()
 logger = logging.getLogger(settings.NODE_LOGGER_NAME)
 
-# 模块级缓存：首次用到时才构造 Agent，避免 import 期副作用
-_score_agent = None
+
+def _build_score_llm() -> RunnableWithFallbacks:
+    """构建带 fallback 的结构化评分 LLM。
+
+    deepseek 失败时自动降级到 qwen，保持与旧 Agent ModelFallbackMiddleware 等价的容错能力。
+    """
+    primary = deepseek_llm.with_structured_output(AgentCandidateScoreSchema)
+    fallback = qwen_llm.with_structured_output(AgentCandidateScoreSchema)
+    return RunnableWithFallbacks(runnable=primary, fallbacks=[fallback])
 
 
-def _get_score_agent():
-    global _score_agent
-    if _score_agent is None:
-        _score_agent = create_agent(
-            model=deepseek_llm,
-            system_prompt=SCORE_FOR_CANDIDATE_SYSTEM_PROMPT,
-            middleware=[ModelFallbackMiddleware(first_model=qwen_llm)],
-            response_format=AgentCandidateScoreSchema,
-        )
-    return _score_agent
-
-_score_user_prompt_template = ChatPromptTemplate.from_messages([
-    ("user", SCORE_FOR_CANDIDATE_USER_PROMPT)
-])
+def _build_score_messages(candidate, position) -> list:
+    """构造评分用的 messages（system + user）。"""
+    user_content = SCORE_FOR_CANDIDATE_USER_PROMPT.format(
+        position=position.model_dump_json(),
+        candidate=candidate.model_dump_json(),
+    )
+    return [
+        SystemMessage(content=SCORE_FOR_CANDIDATE_SYSTEM_PROMPT),
+        HumanMessage(content=user_content),
+    ]
 
 
 @node_error_wrapper
 async def scoring_node(state: CandidateRecruitmentState) -> dict:
-    """
-    AI 评分节点。
-    复用 agents/candidate.py L82-L133 的 score_for_candidate 工具逻辑，
-    但将其从"工具"提升为"图节点"，使评分成为显式流程步骤。
+    """AI 评分节点（直接 LLM 调用，不再走 Agent 循环）。
+
+    用 ``with_structured_output`` 让模型直接产出 ``AgentCandidateScoreSchema``，
+    相比 ``create_agent`` 少了一层 Agent 循环开销（无工具调用、无多轮推理）。
 
     阈值从 ``state["score_pass_threshold"]`` 读取，默认取 Settings.SCORE_PASS_THRESHOLD。
     """
@@ -57,20 +59,14 @@ async def scoring_node(state: CandidateRecruitmentState) -> dict:
 
     logger.info("[scoring] start | candidate_id=%s | threshold=%d", cid, threshold)
 
-    messages = _score_user_prompt_template.invoke({
-        "candidate": candidate.model_dump_json(),
-        "position": position.model_dump_json(),
-    })
+    llm = _build_score_llm()
+    messages = _build_score_messages(candidate, position)
 
     try:
-        response = await _get_score_agent().ainvoke({
-            "messages": messages.to_messages(),
-        })
+        score_result: AgentCandidateScoreSchema = await llm.ainvoke(messages)
     except Exception as e:
         logger.error("[scoring] LLM call failed | candidate_id=%s | error=%s", cid, e)
         raise LLMServiceError(f"AI 评分调用失败: {e}") from e
-
-    score_result: AgentCandidateScoreSchema = response["structured_response"]
 
     logger.info(
         "[scoring] LLM scored | candidate_id=%s | overall_score=%d",

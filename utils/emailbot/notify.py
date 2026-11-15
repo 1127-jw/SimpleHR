@@ -27,7 +27,6 @@ async def _find_candidate_by_email(email_address: str):
         candidate = await candidate_repo.get_by_email(email_address)
         if not candidate:
             return None, None, None
-        # 在 session 内访问关联对象，避免 DetachedInstanceError
         candidate_schema = CandidateSchema.model_validate(candidate)
         position_schema = PositionSchema.model_validate(candidate.position)
         interviewer_schema = UserSH.model_validate(candidate.creator)
@@ -40,12 +39,6 @@ async def notify(email: ParsedEmail, rule) -> None:
     Args:
         email: 已解析的邮件。
         rule: 命中的规则（``MailRule``）。
-
-    当前只处理「询问面试时间或进度」：
-
-    - ``GRAPH_OPEN=False``：走旧 Agent 模式（``CandidateProcessAgent``）
-    - ``GRAPH_OPEN=True``：走 LangGraph 状态图，用 ``Command(resume=...)``
-      恢复 ``get_candidate_email_reply`` 处中断的流程
     """
     graph = settings.GRAPH_OPEN
     if rule.name == "简历投递":

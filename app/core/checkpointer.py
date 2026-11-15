@@ -58,18 +58,16 @@ async def init_checkpointer() -> AsyncPostgresSaver:
         return _saver
 
     async with _init_lock:
-        if _saver is None:
-            settings = get_settings()
-            pg_url = settings.database_url.replace("+psycopg", "")
+        settings = get_settings()
+        pg_url = settings.database_url.replace("+psycopg", "")
+        conn = await AsyncConnection.connect(
+            pg_url, autocommit=True, prepare_threshold=0, row_factory=dict_row
+        )
+        saver = AsyncPostgresSaver(conn=conn, serde=_build_serde())
+        await saver.setup()
 
-            conn = await AsyncConnection.connect(
-                pg_url, autocommit=True, prepare_threshold=0, row_factory=dict_row
-            )
-            saver = AsyncPostgresSaver(conn=conn, serde=_build_serde())
-            await saver.setup()
-
-            _connection = conn
-            _saver = saver
+        _connection = conn
+        _saver = saver
 
     return _saver
 
