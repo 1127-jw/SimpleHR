@@ -78,7 +78,7 @@
         />
       </div>
 
-      <el-dialog v-model="detailsDialogVisible" title="候选人详情">
+      <el-dialog v-model="detailsDialogVisible" title="候选人详情" append-to-body>
         <el-descriptions v-if="selectedCandidate" :column="2" border>
           <el-descriptions-item label="姓名">{{ selectedCandidate.name }}</el-descriptions-item>
           <el-descriptions-item label="职位">{{
@@ -133,7 +133,7 @@
         </template>
       </el-dialog>
 
-      <el-dialog v-model="aiScoreDialogVisible" title="AI评分详情">
+      <el-dialog v-model="aiScoreDialogVisible" title="AI评分详情" append-to-body>
         <div v-if="aiScore">
           <el-descriptions :column="2" border>
             <el-descriptions-item label="综合得分">{{
@@ -176,7 +176,7 @@
         </template>
       </el-dialog>
 
-      <el-dialog v-model="statusDialogVisible" title="修改候选人状态" width="520px">
+      <el-dialog v-model="statusDialogVisible" title="修改候选人状态" width="520px" append-to-body>
         <el-form :model="statusForm" label-width="100px">
           <el-form-item label="当前状态">
             <el-tag

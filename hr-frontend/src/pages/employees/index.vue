@@ -65,7 +65,7 @@
     </div>
 
     <!-- Invite Employee Dialog -->
-    <el-dialog v-model="inviteDialogVisible" title="邀请员工" width="480px">
+    <el-dialog v-model="inviteDialogVisible" title="邀请员工" width="480px" append-to-body>
       <el-form :model="inviteForm" ref="inviteFormRef" :rules="inviteRules" label-width="100px">
         <el-form-item label="邮箱" prop="email">
           <el-input v-model="inviteForm.email" placeholder="请输入员工邮箱" />

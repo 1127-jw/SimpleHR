@@ -11,6 +11,7 @@ import {
   User,
   UserFilled,
   OfficeBuilding,
+  Message,
   SwitchButton,
   Setting,
 } from '@element-plus/icons-vue'
@@ -32,6 +33,7 @@ const navItems: NavItem[] = [
   { to: '/dashboard', label: '首页', icon: House },
   { to: '/positions', label: '职位管理', icon: Postcard },
   { to: '/candidates', label: '候选人管理', icon: User },
+  { to: '/candidates/mail-submissions', label: '邮件投递确认', icon: Message },
   { to: '/employees', label: '员工管理', icon: OfficeBuilding },
 ]
 
@@ -48,6 +50,10 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   positions: { title: '职位管理', subtitle: '管理与发布招聘职位' },
   candidates: { title: '候选人管理', subtitle: '跟踪候选人全流程状态' },
   'candidates-add': { title: '添加候选人', subtitle: '上传简历并自动解析关键信息' },
+  'candidates-mail-submissions': {
+    title: '邮件投递确认',
+    subtitle: '确认邮件投递的简历并创建候选人',
+  },
   employees: { title: '员工管理', subtitle: '邀请与管理在职员工' },
   'hr-management': { title: 'HR 管理', subtitle: '为 HR 指派负责部门' },
   settings: { title: '个人设置', subtitle: '账号信息、密码与钉钉绑定' },

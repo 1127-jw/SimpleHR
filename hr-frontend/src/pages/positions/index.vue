@@ -121,7 +121,7 @@
     </div>
 
     <!-- 添加/编辑职位对话框 -->
-    <el-dialog v-model="dialog.visible" :title="dialog.title" width="1000">
+    <el-dialog v-model="dialog.visible" :title="dialog.title" width="1000" append-to-body>
       <el-form :model="positionForm" label-width="auto">
         <el-form-item label="职位标题">
           <el-input v-model="positionForm.title" placeholder="请输入标题" />

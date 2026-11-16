@@ -7,7 +7,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from app.agents.llms import qwen_llm, deepseek_llm
 from app.agents.prompts import EXTRACT_CANDIDATE_SYSTEM_PROMPT
 from app.schemas.agent_schema import AgentCandidateSchema
-from app.workflow.candidate_nodes.check_availability_node import get_current_time
+from app.agents.candidate import get_current_time
 logger = logging.getLogger(__name__)
 
 _agent = None

@@ -43,16 +43,28 @@ from typing import Awaitable, Callable, Optional
 from utils.emailbot.attachments import AttachmentSaver
 from utils.emailbot.config import MailSettings
 from utils.emailbot.imap_client import ImapClient
+from utils.emailbot.intent import MailIntent, MailIntentResult
 from utils.emailbot.models import ParsedEmail
 from utils.emailbot.parser import parse_email
-from utils.emailbot.rules import MailRule
+from utils.emailbot.rules import MailRule, RuleAction
 from utils.emailbot.smtp_client import SmtpClient
 from utils.emailbot.state import StateStore
 
+from app.core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
-# 命中规则后的回调：async def hook(email, rule) -> None
-MatchHook = Callable[[ParsedEmail, MailRule], Awaitable[None]]
+settings = get_settings()
+
+# 命中规则后的回调：async def hook(email, rule) -> MailIntentResult | None
+# 返回分类结果，供 bot 决定自动回复（意图分类只在 on_match 内做一次）
+MatchHook = Callable[[ParsedEmail, MailRule | None], Awaitable[MailIntentResult | None]]
+
+# 按意图决定的自动回复文案（原规则自带的 reply_text 职责迁移到这里）
+INTENT_REPLY_TEXT = {
+    MailIntent.RESUME_SUBMISSION: "您好，您的简历已收到，我们会在评估后与您联系。",
+    MailIntent.PROGRESS_INQUIRY: "您好，您的应聘状态正在评估中，请耐心等待通知。",
+}
 
 
 class MailBot:
@@ -164,38 +176,55 @@ class MailBot:
         attachments = self._saver.save_all(email)
         email.attachments = attachments
 
-        # 3) 规则匹配
-        matched: Optional[MailRule] = None
-        for rule in self.rules:
-            if rule.matches(subject=email.subject,
-                            sender=f"{email.from_.name} {email.from_.address}",
-                            body=email.text,
-                            attachment_names=[a.filename for a in attachments]):
-                matched = rule
-                break
+        # 3) 规则匹配：收集全部命中
+        matched_rules: list[MailRule] = [
+            r for r in self.rules
+            if r.matches(
+                subject=email.subject,
+                sender=f"{email.from_.name} {email.from_.address}",
+                body=email.text,
+                attachment_names=[a.filename for a in attachments],
+            )
+        ]
+
+        # L0 拦截：任一 BLOCK 命中 → 直接忽略，不进意图层（省掉一次 LLM 调用）
+        blocked = [r for r in matched_rules if r.action is RuleAction.BLOCK]
+        if blocked:
+            logger.info("[L0 BLOCK] uid=%s | 命中=%s",
+                        email.uid, [r.name for r in blocked])
+            return
+
+        # 先验标签
+        email.prior_intents = [
+            r.prior_intent for r in matched_rules
+            if r.action is RuleAction.PRIOR and r.prior_intent
+        ]
 
         # 4) 无论规则是否匹配，只要处理过就标记已读（IMAP \Seen + state 去重）
         #    这样不会重复处理同一封邮件，也不会在邮箱里一直显示未读
         await self._mark_email_seen(email)
 
-        if matched is None:
-            return
-
-        logger.info("rule [%s] hit: uid=%s from=%s subject=%s",
-                    matched.name, email.uid, email.sender, email.subject)
-
-        # 5) 去重后回复（Message-ID 判重，防游标回退导致的二次回复）
-        if self.settings.auto_reply and matched.reply_text \
-                and not self._state.is_seen(email.message_id):
-            await self.reply(email, text=matched.reply_text)
-        self._state.mark_seen(email.message_id)
-
-        # 6) 通知业务方（提醒逻辑）
+        # 5) 通知业务方：on_match 内部完成意图分类，并返回分类结果
+        intent_result: Optional[MailIntentResult] = None
         if self.on_match:
             try:
-                await self.on_match(email, matched)
+                intent_result = await self.on_match(
+                    email, matched_rules[0] if matched_rules else None
+                )
             except Exception:
                 logger.exception("on_match hook failed")
+
+        # 6) 自动回复：由意图决定，而不是由规则文案决定
+        should_reply = (
+            self.settings.auto_reply
+            and intent_result is not None
+            and intent_result.intent.value in settings.INTENT_AUTO_REPLY_INTENTS
+            and not intent_result.needs_review
+            and intent_result.intent in INTENT_REPLY_TEXT
+        )
+        if should_reply and not self._state.is_seen(email.message_id):
+            await self.reply(email, text=INTENT_REPLY_TEXT[intent_result.intent])
+        self._state.mark_seen(email.message_id)
 
     async def _mark_email_seen(self, email: ParsedEmail) -> None:
         """把一封邮件标记为已读：IMAP \\Seen 标志 + state 去重。"""
@@ -243,6 +272,18 @@ class MailBot:
             # 客户端就回落到上面的 text）
             msg.add_alternative(html, subtype="html")
         await self._smtp.send_message(msg)
+        # 记录发出的 Message-ID，供后续归属（In-Reply-To / References 匹配）使用
+        await self._remember_outbound_message_id(msg["Message-ID"], msg["To"])
+
+    async def _remember_outbound_message_id(self, message_id: str, to: str) -> None:
+        """把已发出的 Message-ID 写入 Redis（发件人线索），失败不影响发信。"""
+        try:
+            from app.core.redis_client import get_redis
+
+            r = get_redis()
+            await r.hset("outbound_message_ids", message_id.strip("<>"), to)
+        except Exception:  # noqa: BLE001 - 归属信息是增强项，不能拖垮发信
+            logger.debug("记录 outbound Message-ID 失败", exc_info=True)
 
     async def reply(self, email: ParsedEmail, *, text: str) -> None:
         raw = email.raw

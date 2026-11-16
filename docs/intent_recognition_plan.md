@@ -722,6 +722,18 @@ DEFAULT_RULES = [
         action=RuleAction.PRIOR,
         prior_intent="RESUME_SUBMISSION",
     ),
+    # 强特征：面试协商（只用强词，绝不加"确认/好的/可以/上午/下午/点/分"这类泛词）
+    # 作用：给意图层一个先验方向；命中后仍低置信 → 转人工，不自动恢复图
+    MailRule(
+        name="面试协商",
+        keywords=[
+            "面试时间", "面试安排", "协商面试", "调整面试", "面试进度",
+            "改期", "换个时间", "另约", "重新约", "拒绝面试", "放弃面试",
+        ],
+        fields=["subject", "body"],
+        action=RuleAction.PRIOR,
+        prior_intent="INTERVIEW_REPLY",
+    ),
 ]
 ```
 
@@ -788,6 +800,8 @@ await save_outbound_message_id(
     message_id=msg["Message-ID"],
 )
 ```
+
+> **实现细节以实施稿为准**：最终实现中，意图分类只在 `notify`（`on_match`）里做一次，`MatchHook` 返回 `MailIntentResult` 供 `bot` 决定自动回复，避免重复调用 LLM。详见 [intent_recognition_implementation.md](intent_recognition_implementation.md) 第 5 节。
 
 ### 5.6 `app/core/config.py` 新增配置
 
@@ -928,7 +942,7 @@ def test_rule_fallback_marks_generic_as_review(monkeypatch):
 |---|---|---|
 | `BLOCK` | 拦截，不进 LLM | 自动回复、退信、营销、黑名单 |
 | `ALLOW` | 放行，不附标签 | 默认 |
-| `PRIOR` | 放行 + 打先验意图标签 | 带附件 + 简历词 → `RESUME_SUBMISSION` |
+| `PRIOR` | 放行 + 打先验意图标签 | 带附件 + 简历词 → `RESUME_SUBMISSION`；面试强词 → `INTERVIEW_REPLY` |
 
 ### 6.4 必须做的四件事
 
@@ -970,6 +984,8 @@ def test_rule_fallback_marks_generic_as_review(monkeypatch):
 
 - 候选人换邮箱回复 → 丢上下文（现状 `utils/emailbot/notify.py#L65`）。
 - 多人共用邮箱 → 串 thread。
+
+> **落地状态**：本轮**未实施**该改造，`thread_id` 仍为 `candidate.email`。原因是建图（`app/tasks/agent_tasks.py`）与超时巡检（`app/tasks/timeout_tasks.py`）都用邮箱做 thread_id，单方面修改会让 resume 落空；需三处同步改造，列为后续项。详见 [intent_recognition_implementation.md](intent_recognition_implementation.md) 第 16 节。
 
 ---
 

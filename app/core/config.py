@@ -125,6 +125,36 @@ class Settings(BaseSettings):
         default=15, ge=1, description="邮件回复超时巡检间隔（分钟）"
     )
 
+    # ---------- 意图识别 ----------
+    # rule：纯规则（兜底/降级）；llm：纯大模型；hybrid：LLM 优先、失败回落规则
+    INTENT_ENGINE: str = Field(default="hybrid", description="意图识别引擎：rule / llm / hybrid")
+    INTENT_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.70, ge=0.0, le=1.0, description="低于该置信度转人工复核"
+    )
+    # 允许自动回复的意图白名单（高风险动作一律不自动回）
+    INTENT_AUTO_REPLY_INTENTS: list[str] = Field(
+        default=["RESUME_SUBMISSION", "PROGRESS_INQUIRY"],
+        description="允许自动回复的意图白名单",
+    )
+    INTENT_HUMAN_REVIEW_ENABLED: bool = Field(default=True, description="低置信是否转人工复核")
+    INTENT_MAX_MAIL_CHARS: int = Field(default=4000, ge=500, description="分类正文截断长度")
+    INTENT_CACHE_SIZE: int = Field(default=20, description="进程内分类结果缓存上限")
+    INTENT_LLM_TIMEOUT_SECONDS: float = Field(
+        default=30.0, ge=1.0, description="单次意图分类 LLM 调用超时"
+    )
+
+    # ---------- 邮件投递待确认 ----------
+    MAIL_SUBMISSION_EXPIRE_DAYS: int = Field(
+        default=7, ge=1, description="待确认投递的超期天数"
+    )
+    MAIL_SUBMISSION_DEFAULT_POSITION_ID: str = Field(
+        default="", description="匹配不到职位时的默认职位，留空则转人工"
+    )
+    MAIL_SUBMISSION_SWEEP_INTERVAL_MINUTES: int = Field(
+        default=60, ge=1, description="待确认投递超期巡检间隔（分钟）"
+    )
+
+
     # ---------- 登录限流（滑动窗口，单位：次/60 秒） ----------
     LOGIN_RATE_LIMIT_PER_IP: int = Field(
         default=20, ge=1, description="单 IP 登录尝试上限（60 秒窗口）"

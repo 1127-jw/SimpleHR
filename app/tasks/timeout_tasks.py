@@ -1,24 +1,15 @@
 """邮件回复超时兜底巡检。
-本模块提供一个周期性巡检任务：
 
-1. 查询 ``email_invite_sent_at`` 早于 ``now - EMAIL_REPLY_TIMEOUT_HOURS``
-   且状态仍处于 ``AI_FILTER_PASSED`` / ``MANUAL_PASSED`` 的候选人
-   （这两个状态意味着流程正停在等待回复的中断点）；
-2. 用 ``Command(resume=EMAIL_REPLY_TIMEOUT)`` 恢复状态图，
-   由既有的 ``negotiation_expired_node`` 把状态推进到 ``NEGOTIATION_EXPIRED``。
+业务逻辑：查询 ``email_invite_sent_at`` 早于 ``now - EMAIL_REPLY_TIMEOUT_HOURS``
+且状态仍处于 ``AI_FILTER_PASSED`` / ``MANUAL_PASSED`` 的候选人（这两个状态意味着
+流程正停在等待回复的中断点），用 ``Command(resume=EMAIL_REPLY_TIMEOUT)`` 恢复
+状态图，由既有的 ``negotiation_expired_node`` 把状态推进到 ``NEGOTIATION_EXPIRED``。
 
-安全性
-------
-* 恢复前先用 ``graph.aget_state()`` 确认该 thread **确实存在待响应的
-  interrupt**，避免对已完成 / 未启动的 thread 误恢复。
-* 用 Redis ``SET NX`` 做跨 worker 互斥，多进程部署下同一时刻只有一个
-  巡检在执行。
+生命周期管理（init / close / 定时循环）已抽到 ``PeriodicTaskManager`` 基类。
 """
 import asyncio
 import logging
-from contextlib import suppress
 from datetime import timedelta
-from typing import Optional
 
 from langgraph.types import Command
 
@@ -27,6 +18,7 @@ from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
 from app.core.redis_client import get_redis
 from app.repository.resume_repo import CandidateRepo
+from app.tasks.periodic_task import PeriodicTaskManager
 from app.workflow.candidate_graph import build_candidate_graph
 from app.workflow.candidate_state import EMAIL_REPLY_TIMEOUT
 from utils.time_ISO8601_datatime import now_beijing, to_naive_beijing
@@ -117,69 +109,14 @@ async def sweep_stale_email_replies() -> int:
             pass
 
 
-# ============================================================
-# 生命周期管理：init / close
-# ============================================================
+class TimeoutSweepManager(PeriodicTaskManager):
+    """邮件回复超时巡检的生命周期管理器。"""
 
-class TimeoutSweepManager:
-    """超时巡检任务的生命周期管理器（与 MailManager 风格一致）。
-
-    用法::
-
-        await TimeoutSweepManager.init()    # 启动后台巡检任务
-        ...
-        await TimeoutSweepManager.close()   # 取消并等待任务结束
-
-    巡检只依赖 DB + Redis + checkpointer，不依赖邮件服务，
-    因此不受 MAIL_BOT_ENABLED 控制。
-    """
-
-    _task: Optional[asyncio.Task] = None
+    _task_name = "邮件回复超时巡检"
+    _interval_setting = "EMAIL_REPLY_SWEEP_INTERVAL_MINUTES"
 
     @classmethod
-    async def init(cls) -> None:
-        """启动后台巡检任务（全局只启动一次）。"""
-        if cls._task is not None:
-            logger.warning("超时巡检已初始化，跳过重复 init")
-            return
-
-        cls._task = asyncio.create_task(
-            _sweep_loop(), name="email-reply-timeout-sweep"
-        )
-        logger.info(
-            "邮件回复超时巡检已启动，间隔 %s 分钟",
-            settings.EMAIL_REPLY_SWEEP_INTERVAL_MINUTES,
-        )
-
-    @classmethod
-    async def close(cls) -> None:
-        """取消并等待巡检任务结束。"""
-        if cls._task is None:
-            return
-
-        cls._task.cancel()
-        with suppress(asyncio.CancelledError):
-            await cls._task
-        cls._task = None
-        logger.info("邮件回复超时巡检已停止")
-
-
-async def _sweep_loop() -> None:
-    """周期性执行超时巡检，直到任务被取消。
-
-    先等待一个周期再开始，避免应用启动瞬间就压一波数据库查询；
-    单 worker 下没有并发问题，多 worker 时由 sweep 内部的 Redis 锁互斥。
-    """
-    interval_seconds = settings.EMAIL_REPLY_SWEEP_INTERVAL_MINUTES * 60
-    await asyncio.sleep(interval_seconds)
-
-    while True:
-        try:
-            swept = await sweep_stale_email_replies()
-            if swept:
-                logger.info("邮件回复超时巡检：已推进 %s 个候选人", swept)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("邮件回复超时巡检失败，将在下个周期重试")
-        await asyncio.sleep(interval_seconds)
+    async def _run_once(cls) -> None:
+        swept = await sweep_stale_email_replies()
+        if swept:
+            logger.info("邮件回复超时巡检：已推进 %s 个候选人", swept)

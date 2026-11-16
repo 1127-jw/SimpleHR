@@ -25,7 +25,7 @@
       </el-table>
     </div>
 
-    <el-dialog v-model="assignVisible" title="指派负责部门" width="520px">
+    <el-dialog v-model="assignVisible" title="指派负责部门" width="520px" append-to-body>
       <div class="mb-3 text-sm text-desc" v-if="selectedHR">
         {{ selectedHR.realname }}（{{ selectedHR.email }}）
       </div>

@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, time
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import RunnableWithFallbacks
 from langgraph.types import interrupt
-from pydantic import BaseModel, Field
 
 from app.agents.llms import deepseek_llm, qwen_llm
 from app.agents.prompts import PROPOSED_TIME_SYSTEM_PROMPT
@@ -14,6 +13,7 @@ from app.core.exceptions import (
     EmailSendError,
     NegotiationError,
 )
+from app.schemas.intent_schema import ProposedTime
 from app.service.dingtalk_ser import get_user_available_slots
 from app.workflow.candidate_state import (
     CandidateRecruitmentState,
@@ -25,22 +25,6 @@ from utils.time_ISO8601_datatime import BEIJING_TZ, now_beijing
 
 settings = get_settings()
 logger = logging.getLogger(settings.NODE_LOGGER_NAME)
-
-# ==================== Schema ====================
-class ProposedTime(BaseModel):
-    confirm: bool = Field(
-        description="True 表示邮件内容为同意上次提供的邀约时间，False 表示邮件不同意上次提供的邀约时间"
-    )
-    refused: bool = Field(
-        description="True 表示邮件内容为回拒该次面试，False 表示邮件中提供了面试时间"
-    )
-    proposed_time: str = Field(
-        description="面试时间，格式：YYYY-MM-DD HH:MM:SS"
-    )
-    exactly: str = Field(
-        description="am/pm 表示上午/下午；如果是准确时间则为hours"
-    )
-
 
 # ==================== 时间文本生成（替代 get_current_time 工具）====================
 def _build_current_time_text() -> str:

@@ -194,6 +194,9 @@ async def update_candidate_status(
         if not candidate:
             raise HTTPException(status_code=404, detail="候选人不存在")
 
+        # 记录流转前状态，供审计使用
+        before_status = candidate.status
+
         # 校验状态流转（图状转移表）
         try:
             validate_transition(candidate.status, status_data.status)
@@ -236,6 +239,14 @@ async def update_candidate_status(
 
         # 更新候选人状态
         await candidate_repo.update_candidate_status(candidate_id=candidate_id, status=status_data.status)
+
+    # 状态流转（尤其"人工通过/重试"会重启流程）属于高影响操作，记审计
+    audit(
+        "candidate.status_update",
+        user_id=current_user.id,
+        target=f"candidate:{candidate_id}",
+        detail=f"{before_status} -> {status_data.status}",
+    )
 
     # 人工通过/重试：异步触发工作流重启（跳转到 email_invite 节点）
     if status_data.status == CandidateStatusEnum.MANUAL_PASSED:

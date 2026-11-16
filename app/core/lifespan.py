@@ -15,6 +15,7 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理。"""
     from app.core.checkpointer import init_checkpointer, close_checkpointer
     from app.tasks.timeout_tasks import TimeoutSweepManager
+    from app.tasks.mail_submission_tasks import MailSubmissionSweepManager
     from utils.emailbot.mail_manager import MailManager
 
     setup_logging(level="INFO")
@@ -28,9 +29,11 @@ async def lifespan(app: FastAPI):
         password=os.getenv("MAIL_PASSWORD"),
     )
     await TimeoutSweepManager.init()
+    await MailSubmissionSweepManager.init()
 
     yield
 
+    await MailSubmissionSweepManager.close()
     await TimeoutSweepManager.close()
     await MailManager.close()
     await close_redis()

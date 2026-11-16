@@ -135,6 +135,12 @@ async def invite_user(
 ):
     invite_code = await get_invite_code(invite_data,session,r,user.department_id)
     background_tasks.add_task(send_invite_email_task, str(invite_data.email), invite_code)
+    audit(
+        "user.invite",
+        user_id=user.id,
+        target=f"invitee:{invite_data.email}",
+        detail=str(invite_data.department_id),
+    )
     return ResponseSchema()
 
 @router.post("/register",summary="注册", response_model=UserRegisterResSchema)
