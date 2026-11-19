@@ -16,6 +16,8 @@ export enum CandidateStatusEnum {
   REJECTED = '已拒绝',
   NEGOTIATION_EXPIRED = '协商超时',
   PROCESSING_ERROR = '处理异常',
+  // AI 评分通过后、发送邀请邮件前的人工闸门
+  PENDING_MANUAL_DECISION = '待人工确认',
 }
 
 // 允许的状态转移表（与后端保持一致）
@@ -25,7 +27,15 @@ export const ALLOWED_TRANSITIONS: Record<string, string[]> = {
     CandidateStatusEnum.AI_FILTER_PASSED,
   ],
   [CandidateStatusEnum.AI_FILTER_FAILED]: [CandidateStatusEnum.MANUAL_PASSED],
-  [CandidateStatusEnum.AI_FILTER_PASSED]: [CandidateStatusEnum.WAITING_FOR_INTERVIEW],
+  [CandidateStatusEnum.AI_FILTER_PASSED]: [
+    CandidateStatusEnum.PENDING_MANUAL_DECISION,
+    CandidateStatusEnum.WAITING_FOR_INTERVIEW,
+  ],
+  // 待人工确认：确认发送（回到 AI 筛选成功，由流程继续）或直接淘汰
+  [CandidateStatusEnum.PENDING_MANUAL_DECISION]: [
+    CandidateStatusEnum.AI_FILTER_PASSED,
+    CandidateStatusEnum.AI_FILTER_FAILED,
+  ],
   [CandidateStatusEnum.NEGOTIATION_EXPIRED]: [CandidateStatusEnum.MANUAL_PASSED],
   [CandidateStatusEnum.PROCESSING_ERROR]: [CandidateStatusEnum.MANUAL_PASSED],
   [CandidateStatusEnum.MANUAL_PASSED]: [CandidateStatusEnum.WAITING_FOR_INTERVIEW],
@@ -203,6 +213,14 @@ export const downloadResumeFile = (resumeId: string): Promise<Blob> =>
 
 export const updateCandidateStatus = (candidateId: string, data: CandidateStatusUpdateData) => {
   return httpRequest.patch(`/candidate/${candidateId}/status`, data)
+}
+
+/**
+ * 人工闸门：决定是否给候选人发送面试邀请邮件，唤醒暂停的招聘图。
+ * approve = 发送并继续；reject = 不发送，淘汰。
+ */
+export const submitManualDecision = (candidateId: string, decision: 'approve' | 'reject') => {
+  return httpRequest.post(`/candidate/${candidateId}/manual-decision`, { decision })
 }
 
 export const getCandidateAiScore = (candidateId: string) => {

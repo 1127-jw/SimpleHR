@@ -55,18 +55,18 @@ TypeError: can't compare offset-naive and offset-aware datetimes
 
 系统中混用两种时间：
 - `datetime.now()` → **naive**（无时区）
-- `iso8601_to_datetime_beijing()` → **aware**（带 Asia/Shanghai）
+- ISO 8601 解析出来的时间 → **aware**（带 Asia/Shanghai）
 
 Python 不允许直接比较，导致面试官空闲时间计算失败。
 
 ### 解决方案
 
-统一使用 `BEIJING_TZ` 时区：
+统一到 `app/core/time.py`（见 `docs/change2026-11-17.md` §十九）：内存里一律 aware 北京时间，
+只有写库时才剥成 naive。时区常量只有一个：
 
 ```python
 # utils/available_time.py
-from datetime import datetime, time
-from utils.time_ISO8601_datatime import BEIJING_TZ
+from app.core.time import BEIJING_TZ
 
 # 修改前
 window_start = datetime.combine(search_date.date(), win_start_time)  # naive
@@ -75,11 +75,14 @@ window_start = datetime.combine(search_date.date(), win_start_time)  # naive
 window_start = datetime.combine(search_date.date(), win_start_time, tzinfo=BEIJING_TZ)  # aware
 ```
 
-同时修复 `_parse_proposed_time`，解析后附加时区：
+时间字符串解析后补时区，也不许再手写 `replace(tzinfo=...)`：
 
 ```python
-naive_dt = datetime.strptime(time_str, fmt)
-return naive_dt.replace(tzinfo=BEIJING_TZ)
+# 修改前（check_availability_node.py）
+proposed_dt = datetime.strptime(text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=BEIJING_TZ)
+
+# 修改后
+proposed_dt = from_naive_beijing(datetime.strptime(text, "%Y-%m-%d %H:%M:%S"))
 ```
 
 ### 成果
@@ -87,6 +90,7 @@ return naive_dt.replace(tzinfo=BEIJING_TZ)
 - 时间比较逻辑正常工作
 - 面试官空闲时间计算准确
 - 避免了时区转换错误
+- 取时间/换时区只剩一个入口，`tests/test_time_policy.py` 扫源码禁止手写 `timedelta(hours=8)`
 
 ---
 

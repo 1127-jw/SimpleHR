@@ -391,8 +391,10 @@
 
 **答题要点**
 - 系统里混用过 `datetime.now()`（naive）和带 `Asia/Shanghai` 的 aware 时间，直接比较会抛 `TypeError: can't compare offset-naive and offset-aware datetimes`。
-- 统一：计算侧全部用 `BEIJING_TZ`（aware），落库前用 `to_naive_beijing()` 转成北京时间数值，保证库里是「北京时间的 naive datetime」，避免时区歧义。
-- 涉及文件：`utils/time_ISO8601_datatime.py`、`utils/available_time.py`、`confirm_node.py`。
+- 统一：**内存里流转一律 aware 北京时间**（`now_beijing()` / `from_naive_beijing()`），只有跨两道边界时才变形态——写库剥成 naive 北京时间数值（`db_now()` / `to_naive_beijing()`，列是 `TIMESTAMP WITHOUT TIME ZONE`，所以零迁移），出网络格式化成 ISO-8601 字符串（`to_iso8601()` / `from_iso8601()`）。JWT 与审计日志仍走 UTC。
+- 为什么用固定偏移 `timezone(timedelta(hours=8))` 而不是 `ZoneInfo("Asia/Shanghai")`：中国 1991 年后无夏令时，两者对现在与将来的时间戳等价，但后者依赖镜像里的 tzdata（项目没声明这个依赖，`python:3.13-slim` 上就是 `ZoneInfoNotFoundError`）。
+- 守口：`tests/test_time_policy.py` 扫 `app/`、`utils/` 源码，出现 `timedelta(hours=8)`、`replace(tzinfo=None)` 或裸 `datetime.now()` 直接失败——防止「统一」再退化成十几处手写换算。
+- 涉及文件：`app/core/time.py`（替代原 `utils/time_ISO8601_datatime.py`，取舍与实测见 `docs/change2026-11-17.md` §十九）、`utils/available_time.py`、`confirm_node.py`。
 
 ---
 
@@ -462,7 +464,7 @@
 ### 7.2 长连接、断线自愈、并发串行化？
 
 **答题要点**
-- `MailManager` 用 `AsyncIOScheduler` 每 20 秒轮询；`max_instances=1` 防重叠，`coalesce=True` 合并错过的执行，`shutdown(wait=False)` 快速关闭。
+- `MailManager` 的轮询由 `app/tasks/mail_poll_loop.py` 的 `MailPollTimer` 驱动，与周期巡检共用 `app/tasks/scheduler.py` 的调度策略，但邮件是**独立开关**：恒为固定间隔 `MAIL_POLL_INTERVAL_SECONDS`（默认 15 秒），既不看 `DEBUG` 也不跟随全局。单轮失败不退出循环，下一轮自动重试。
 - `MailBot._ensure_connected()`：发送前检查 `is_connected`，断了自动重连（节点里也常显式判断并 `connect()`）。
 - `bot.py` 里用 `asyncio.Lock` 串行化处理（imap/smtp 客户端内部），`_spawn` 保留后台任务引用防 GC。
 
@@ -689,11 +691,11 @@
 5. **`CandidateModel.email` 可为空**，但 `thread_id=candidate.email` 用邮箱，空邮箱会导致 thread_id 异常（`candidate.py` L79）。
 6. **`CandidateModel.resume_id` 非空**，但下载接口仍判断 `candidate.resume is None`，两边假设不完全一致。
 7. **状态流转表只在 API 层校验**，工作流节点直接 `update_candidate_status`，存在绕过校验的路径（`error_node`、`confirm_node`）。
-8. **`get_candidate_email_reply_node` 没有 `@node_error_wrapper`**：它是纯 interrupt 节点，正常不会抛业务异常，但缺少统一异常网（可作为改进点）。
+8. **`get_candidate_email_reply_node` 没有 `@node_error_wrapper`** —— **这是对的，不要加**。它曾把 `interrupt()` 用 `except Exception` 包住，吞掉 `GraphInterrupt`，导致图从不暂停、回复永远收不到（已于 2026-11-17 修复）。`node_error_wrapper` 的「未知异常」分支同样会把 `GraphInterrupt` 包装成 `AppException`，破坏中断，所以该节点必须保持裸调用。
 9. **`route_after_check_availability` 返回 `"confirmed"`，节点名是 `"confirm"`**，靠 `path` 映射 `{"confirmed": "confirm"}` 连接——能跑，但命名容易看错。
 10. **`check_availability_node` 里 `can_not_find_available_time` 返回的 `"SYSTEM_TIME_UNAVAILABLE"` 与路由常量 `REPLY_TIME_AVAILABLE` 不是同一套语义**，路由只认 `REPLY_REFUSED` / `REPLY_TIME_AVAILABLE`，其余走轮次判断。
-11. **`email_invite` 无空闲分支返回 `email_sent_at: None`**，但 `_mark_invite_sent` 失败只记日志，超时巡检可能漏掉这条（不过状态仍是「AI筛选成功」，只要 `email_invite_sent_at` 有值才会被扫到）。
-12. **README 写「46 个用例」，实际 `tests/` 有 67 个测试函数**（文档滞后）。
+11. **`email_invite` 无空闲分支返回 `email_sent_at: None`**，但 DB 里 `update_email_invite_sent_at` 写了时间，state 与库不一致（超时巡检按库里的值扫，能捞到，不影响功能，但读 state 的代码别依赖这个字段）。
+12. **README 的测试数量长期滞后**（曾写 46，实际先涨到 169、再涨到 219）。数字写死在文档里必然漂移，改成跑一次 `pytest --collect-only -q` 校准。
 13. **`get_user_access_token` 里 `str(await r.get(...))` 在 key 不存在时会得到 `"None"`**，再用它去刷新（`dingtalk_ser.py` L122）。
 14. **`login` 失败返回 400 而不是 401**（有意为之，前端拦截器会因 401 自动刷新 token）。
 15. **`refresh_access_token` 抛 `ValueError`**，路由没有显式转换，可能变成 500 而不是 401。

@@ -12,7 +12,7 @@
 - [三、6 个核心概念](#三6-个核心概念)
 - [四、5 分钟跑通第一个 Workflow](#四5-分钟跑通第一个-workflow)
 - [五、语法详解](#五语法详解)
-- [六、实战：simplejob 自动部署](#六实战simplejob-自动部署)
+- [六、实战：simplejob 的 CI/CD](#六实战simplejob-的-cicd)
 - [七、怎么看运行结果 / 排查失败](#七怎么看运行结果--排查失败)
 - [八、常见坑与最佳实践](#八常见坑与最佳实践)
 - [九、术语速查表](#九术语速查表)
@@ -294,52 +294,40 @@ jobs:
 
 ---
 
-## 六、实战：simplejob 自动部署
+## 六、实战：simplejob 的 CI/CD
 
-### 6.1 整体思路
+本章内容来自 simplejob 项目的真实配置，可直接对照仓库里的文件学习：
+
+| 文件 | 作用 |
+|---|---|
+| `.github/workflows/ci.yml` | CI + CD 的全部定义（四个 Job） |
+| `scripts/deploy.sh` | 服务器端部署脚本（CD 时执行） |
+| `scripts/ci/smoke.py` | 冒烟测试：请求核心接口 |
+| `app/core/config.py` | `MAIL_BOT_ENABLED` 开关（CI 跳过邮件机器人） |
+
+### 6.1 完整链路
 
 ```
-本地 git push
+git push (master)
    ↓
-GitHub 检测到 master 有推送
-   ↓
-启动一台云端 Ubuntu 虚拟机（Runner）
-   ↓
-用 SSH 私钥登录你的 ECS
-   ↓
-在服务器上执行部署脚本 scripts/deploy.sh
-   ↓
-完成（拉代码 → 装依赖 → 构建前端 → 重启后端）
+GitHub Actions（同一条 workflow，四个 Job 串起来）
+   ├── backend   ✅ uv sync + import 校验 + pytest（52 个测试）
+   ├── frontend  ✅ npm ci + 类型检查 + vite build
+   ├── smoke     ✅ service containers（PG+Redis）→ 起应用 → 接口冒烟
+   └── deploy    ✅ needs 上面三个 → SSH 到 ECS → 执行 scripts/deploy.sh
+                     ├── git fetch && reset --hard origin/master
+                     ├── uv sync --all-groups
+                     ├── npm ci && npm run build
+                     └── sudo simplejob-restart（systemd 拉起后端）
 ```
 
-**为什么用 SSH 而不是在 Runner 上构建？**
-因为你的构建机和运行环境是同一台 ECS，直接在服务器上执行最省事，也不用传产物。
+**为什么 CI 和 CD 写在同一个 workflow 里？**
+用 `needs` 把「检查」和「部署」串成一条链，比拆成两个文件更简单、更可靠：
+任一检查失败，deploy 自动跳过。
 
-### 6.2 前置准备（服务器侧）
+### 6.2 服务器前置准备（一次性，admin 执行）
 
-**① 写部署脚本** `scripts/deploy.sh`（以 simplejob 身份运行）：
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-PROJECT="/opt/simplejob/simple-hr"
-LOG="$PROJECT/logs/deploy.log"
-UV="/home/simplejob/.local/bin/uv"
-
-exec 9>/tmp/simplejob-deploy.lock
-flock -n 9 || exit 0
-
-echo "[$(date '+%F %T')] ===== 开始部署 =====" | tee -a "$LOG"
-cd "$PROJECT"
-git fetch origin && git reset --hard origin/master 2>&1 | tee -a "$LOG"
-"$UV" sync 2>&1 | tee -a "$LOG"
-cd hr-frontend && rm -rf dist && npm ci && npm run build 2>&1 | tee -a "$LOG"
-sudo /usr/local/bin/simplejob-restart
-sleep 3
-systemctl is-active --quiet simplejob && echo "✅ 部署完成" | tee -a "$LOG"
-```
-
-**② 给 simplejob 开一个最小 sudo 口子**（只能重启服务）：
+**① 重启脚本 + 最小 sudo**（让 simplejob 只能重启服务，不能干别的）：
 
 ```bash
 sudo tee /usr/local/bin/simplejob-restart <<'EOF'
@@ -353,70 +341,241 @@ sudo visudo
 # simplejob ALL=(root) NOPASSWD: /usr/local/bin/simplejob-restart
 ```
 
-**③ 生成一把专用的 SSH 部署密钥**（不要用你个人的密钥）：
+**② SSH 部署密钥**（专用，别复用个人密钥）：
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/github_deploy -N ""
-cat ~/.ssh/github_deploy.pub    # 公钥
-```
-
-**④ 把公钥加到 simplejob 的 authorized_keys**：
-
-```bash
 sudo -u simplejob mkdir -p /home/simplejob/.ssh
 sudo -u simplejob tee -a /home/simplejob/.ssh/authorized_keys < ~/.ssh/github_deploy.pub
 sudo -u simplejob chmod 700 /home/simplejob/.ssh
 sudo -u simplejob chmod 600 /home/simplejob/.ssh/authorized_keys
 ```
 
+**③ 服务器 origin 指向 GitHub**（关键，否则部署拉不到新代码）：
+
+```bash
+sudo -u simplejob bash -c 'cd /opt/simplejob/simple-hr && git remote set-url origin git@github.com:<你的用户名>/simple-hr.git'
+```
+
 ### 6.3 配置 GitHub Secrets
 
-仓库 → Settings → Secrets and variables → Actions → New repository secret，添加：
+仓库 → Settings → Secrets and variables → Actions → New repository secret：
 
 | Name | Value |
 |---|---|
 | `SERVER_HOST` | ECS 公网 IP |
 | `SERVER_USER` | `simplejob` |
-| `SSH_PRIVATE_KEY` | `~/.ssh/github_deploy` 的**私钥全文**（含 `-----BEGIN ...` 头尾） |
+| `SSH_PRIVATE_KEY` | `~/.ssh/github_deploy` 私钥全文（含 `-----BEGIN ...` 头尾） |
 
-### 6.4 写流水线 `.github/workflows/deploy.yml`
+### 6.4 CI：三个检查 Job
+
+#### backend（后端测试）
 
 ```yaml
-name: Deploy to ECS
-
-on:
-  push:
-    branches: [master]        # master 有推送就部署
-  workflow_dispatch:          # 也支持手动触发
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+  backend:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python-version: ['3.13']
+    env:
+      # 项目在「导入期」就读配置，CI 没有 .env，必须给占位值
+      MAIL_USERNAME: ci@example.com
+      MAIL_PASSWORD: ci-password
+      MAIL_FROM: ci@example.com
+      ACCESS_SECRET: ci-access-secret-0123456789abcdef0123456789
+      REFRESH_SECRET: ci-refresh-secret-fedcba9876543210fedcba9876543
+      DASHSCOPE_API_KEY: ci-dummy-key
     steps:
-      # 第 1 步：把 secrets 里的私钥写成文件
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: uv sync --all-groups
+      - run: uv run python -c "import app.main; print('backend import OK')"
+      - run: uv run python -m pytest
+```
+
+> **两个必须注意的点**：
+> 1. **必须有 env 占位值**：`app/core/config.py` 的校验器要求 `MAIL_*` 必填、
+>    `ACCESS_SECRET` / `REFRESH_SECRET` 非空，否则 import 阶段直接 `ValidationError`。
+> 2. **必须 `python -m pytest`**：`tests/` 没有 `__init__.py`，直接跑 `pytest`
+>    不会把项目根目录加进 `sys.path`，会报 `No module named 'app'`。
+
+#### frontend（前端构建）
+
+```yaml
+  frontend:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        node-version: [24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: hr-frontend/package-lock.json
+      - run: npm ci
+        working-directory: hr-frontend
+      - run: npm run build
+        working-directory: hr-frontend
+        env:
+          VITE_API_BASE_URL: ''
+```
+
+#### smoke（集成冒烟：service containers）
+
+```yaml
+  smoke:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: hr_system
+          POSTGRES_USER: simplejob
+          POSTGRES_PASSWORD: ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U simplejob -d hr_system"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DB_USERNAME: simplejob
+      DB_PASSWORD: ci-password
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_NAME: hr_system
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: '6379'
+      REDIS_DB: '0'
+      ACCESS_SECRET: ci-access-secret-0123456789abcdef0123456789
+      REFRESH_SECRET: ci-refresh-secret-fedcba9876543210fedcba9876543
+      MAIL_USERNAME: ci@example.com
+      MAIL_PASSWORD: ci-password
+      MAIL_FROM: ci@example.com
+      DASHSCOPE_API_KEY: ci-dummy-key
+      MAIL_BOT_ENABLED: 'false'      # 跳过邮件机器人（CI 没有邮箱服务）
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.13'
+      - run: uv sync --all-groups
+      - name: 初始化数据库（迁移 + 种子数据）
+        run: |
+          uv run alembic upgrade head
+          uv run python init_data.py
+      - name: 启动应用 + 冒烟测试
+        run: |
+          .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          # 等待应用就绪后，请求核心接口
+          uv run python scripts/ci/smoke.py
+```
+
+**service containers 是 GitHub Actions 里最接近真实环境的测试方式**：
+在 Runner 里用 Docker 起临时的 PostgreSQL / Redis，应用连它们跑起来，任务结束即销毁。
+`MAIL_BOT_ENABLED=false` 让应用跳过邮件机器人（它需要真实邮箱，CI 里没有）。
+
+### 6.5 CD：deploy Job
+
+```yaml
+  deploy:
+    name: 部署到服务器
+    needs: [backend, frontend, smoke]
+    if: |
+      github.ref == 'refs/heads/master' && (
+        github.event_name == 'push' ||
+        github.event_name == 'workflow_dispatch'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
       - name: 配置 SSH 密钥
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-
-      # 第 2 步：SSH 登录服务器，执行部署脚本
+      - name: 上传部署脚本
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new \
+              "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+              'install -d -m 755 /opt/simplejob/simple-hr/scripts'
+          ssh -o StrictHostKeyChecking=accept-new \
+              "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+              'cat > /opt/simplejob/simple-hr/scripts/deploy.sh && chmod +x /opt/simplejob/simple-hr/scripts/deploy.sh' \
+              < scripts/deploy.sh
       - name: 执行部署
         run: |
           ssh -o StrictHostKeyChecking=accept-new \
-              ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+              "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
               '/opt/simplejob/simple-hr/scripts/deploy.sh'
 ```
 
-### 6.5 验证
+**关键点**：
+- `needs: [backend, frontend, smoke]` —— 任一检查失败，部署自动跳过
+- `if` —— 只部署 master；push 自动部署，`workflow_dispatch` 支持手动补部署/回滚
+- **先上传脚本再执行** —— 避免「脚本还没上线」的鸡生蛋问题
 
-推送一次代码，然后看 **Actions** 标签页：出现绿色 ✅ 就说明部署成功。
-
-也可以去服务器看日志：
+### 6.6 部署脚本 scripts/deploy.sh
 
 ```bash
-tail -f /opt/simplejob/simple-hr/logs/deploy.log
+#!/usr/bin/env bash
+set -euo pipefail
+PROJECT="/opt/simplejob/simple-hr"
+LOG="$PROJECT/logs/deploy.log"
+UV="/home/simplejob/.local/bin/uv"
+[ -x "$UV" ] || UV="$(command -v uv || true)"
+
+exec 9>/tmp/simplejob-deploy.lock
+flock -n 9 || exit 0
+
+echo "[$(date '+%F %T')] ===== 开始部署 =====" | tee -a "$LOG"
+cd "$PROJECT"
+git fetch origin 2>&1 | tee -a "$LOG"
+git reset --hard origin/master 2>&1 | tee -a "$LOG"
+"$UV" sync --all-groups 2>&1 | tee -a "$LOG"
+cd hr-frontend && rm -rf dist && npm ci 2>&1 | tee -a "$LOG"
+VITE_API_BASE_URL='' npm run build 2>&1 | tee -a "$LOG"
+sudo /usr/local/bin/simplejob-restart
+sleep 3
+systemctl is-active --quiet simplejob && echo "✅ 部署完成" | tee -a "$LOG"
 ```
+
+> **为什么用 `reset --hard` 而不是 `pull`**：仓库历史遗留跟踪了
+> `__pycache__/*.pyc`，服务器运行时会不断重新生成，`git pull` 会因
+> 「local changes would be overwritten」中止；`reset --hard` 直接对齐远端。
+
+### 6.7 验证与回滚
+
+- **验证**：Actions 页面四个 Job 全绿；或服务器上看
+  `tail -f /opt/simplejob/simple-hr/logs/deploy.log`
+- **手动补部署**：Actions → CI → Run workflow
+- **回滚**：`git revert <坏提交> && git push` → 自动部署上一个好版本
+
+### 6.8 本项目踩过的坑（都是真实报错）
+
+| 现象 | 原因 | 解决 |
+|---|---|---|
+| `校验应用可导入` 报 `ValidationError` | backend job 没有 env 占位值 | 补 `env` 块 |
+| 测试报 `No module named 'app'` | 直接跑 `pytest` | 改 `python -m pytest` |
+| 冒烟测试卡在启动 | 邮件机器人连不上邮箱 | `MAIL_BOT_ENABLED=false`（开关内聚在 `MailManager.init`） |
+| 部署脚本报 `local changes would be overwritten` | `.pyc` 本地改动 | 用 `reset --hard` |
+| SSH 报 `dubious ownership` | 用 admin 操作 simplejob 的仓库 | 统一用 simplejob 身份 |
 
 ---
 

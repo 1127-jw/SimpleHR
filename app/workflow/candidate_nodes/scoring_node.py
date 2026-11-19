@@ -3,7 +3,7 @@ import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import RunnableWithFallbacks
 
-from app.agents.llms import deepseek_llm, qwen_llm
+from app.agents.llms import get_deepseek_llm, get_qwen_llm
 from app.agents.prompts import (
     SCORE_FOR_CANDIDATE_SYSTEM_PROMPT,
     SCORE_FOR_CANDIDATE_USER_PROMPT,
@@ -26,8 +26,8 @@ def _build_score_llm() -> RunnableWithFallbacks:
 
     deepseek 失败时自动降级到 qwen，保持与旧 Agent ModelFallbackMiddleware 等价的容错能力。
     """
-    primary = deepseek_llm.with_structured_output(AgentCandidateScoreSchema)
-    fallback = qwen_llm.with_structured_output(AgentCandidateScoreSchema)
+    primary = get_deepseek_llm().with_structured_output(AgentCandidateScoreSchema)
+    fallback = get_qwen_llm().with_structured_output(AgentCandidateScoreSchema)
     return RunnableWithFallbacks(runnable=primary, fallbacks=[fallback])
 
 
@@ -63,7 +63,10 @@ async def scoring_node(state: CandidateRecruitmentState) -> dict:
     messages = _build_score_messages(candidate, position)
 
     try:
-        score_result: AgentCandidateScoreSchema = await llm.ainvoke(messages)
+        from app.core.limiters import llm_slot
+
+        async with llm_slot("llm:score"):
+            score_result: AgentCandidateScoreSchema = await llm.ainvoke(messages)
     except Exception as e:
         logger.error("[scoring] LLM call failed | candidate_id=%s | error=%s", cid, e)
         raise LLMServiceError(f"AI 评分调用失败: {e}") from e

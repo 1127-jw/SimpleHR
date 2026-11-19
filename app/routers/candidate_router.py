@@ -1,20 +1,24 @@
 import os
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks, Query, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from typing import Annotated, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import audit
 from app.core.db import get_db
 from app.core.auth import get_current_user, get_hr_or_superuser
 from app.core.config import get_settings
+from app.core.exceptions import StatusFlowError
 from app.models.user import UserModel
+from app.service.candidate_status_ser import resume_manual_decision
 from uuid import uuid4
 from app.schemas.candidate_schema import CandidateListSchema, CandidateStatusUpdateSchema, CandidateAIScoreRespSchema
-from utils.time_ISO8601_datatime import now_beijing
+from app.core.time import db_now
 
 from app.schemas.candidate_schema import ResumeUploadRespSchema, ResumePaseSchema, ResumeParseTaskRespSchema, \
     TaskInfoSchema,CandidateCreateSchema
@@ -127,6 +131,20 @@ def _resolve_resume_path(file_name: str) -> Path:
     return path
 
 
+# 简历附件不全是 PDF：上传 doc/docx 后为避免二次转换失败会原样落盘。
+# 硬编码 application/pdf 会让浏览器用错误的阅读器打开。
+_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+
+def _resume_response(path: Path) -> FileResponse:
+    media_type = _MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media_type, filename=path.name)
+
+
 @router.get("/{candidate_id}/resume", summary="下载候选人简历")
 async def download_candidate_resume(
     candidate_id: str,
@@ -152,7 +170,7 @@ async def download_candidate_resume(
         target=f"candidate:{candidate_id}",
         detail=file_name,
     )
-    return FileResponse(path, media_type="application/pdf", filename=file_name)
+    return _resume_response(path)
 
 
 @router.get("/resume/{resume_id}", summary="下载简历文件（上传后预览）")
@@ -177,7 +195,46 @@ async def download_resume_file(
         target=f"resume:{resume_id}",
         detail=file_name,
     )
-    return FileResponse(path, media_type="application/pdf", filename=file_name)
+    return _resume_response(path)
+
+
+class ManualDecisionSchema(BaseModel):
+    """人工闸门决定。"""
+
+    decision: Literal["approve", "reject"] = Field(
+        ...,
+        description="approve=发送面试邀请邮件并继续；reject=不发送，淘汰",
+    )
+
+
+@router.post("/{candidate_id}/manual-decision", summary="人工决定是否发送面试邀请", response_model=ResponseSchema)
+async def manual_decision(
+    candidate_id: str,
+    payload: ManualDecisionSchema,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    current_user: UserModel = Depends(get_hr_or_superuser),
+):
+    """唤醒停在「待人工确认」的招聘图。
+
+    权限与 ``PATCH /candidate/{id}/status`` 一致：HR / 超管 + 可见性校验。
+    """
+    async with session.begin():
+        candidate = await CandidateRepo(session).get_for_user(candidate_id, current_user)
+        if not candidate:
+            raise HTTPException(status_code=404, detail="候选人不存在或无权访问")
+
+    try:
+        await resume_manual_decision(candidate_id, payload.decision)
+    except StatusFlowError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    audit(
+        "candidate.manual_decision",
+        user_id=current_user.id,
+        target=f"candidate:{candidate_id}",
+        detail=payload.decision,
+    )
+    return ResponseSchema()
 
 @router.patch("/{candidate_id}/status", summary="更新候选人状态", response_model=ResponseSchema)
 async def update_candidate_status(
@@ -190,9 +247,12 @@ async def update_candidate_status(
     async with session.begin():
         candidate_repo = CandidateRepo(session)
         interview_repo = InterviewRepo(session)
-        candidate = await candidate_repo.get_by_id(candidate_id)
+        # 用 get_for_user 而不是 get_by_id：可见性判定要和列表/下载接口一致，
+        # 否则任何登录用户凭 candidate_id 就能改写他人候选人的状态、新建面试记录。
+        # 「不存在」与「无权访问」返回同一状态，避免被用来枚举候选人 id。
+        candidate = await candidate_repo.get_for_user(candidate_id, current_user)
         if not candidate:
-            raise HTTPException(status_code=404, detail="候选人不存在")
+            raise HTTPException(status_code=404, detail="候选人不存在或无权访问")
 
         # 记录流转前状态，供审计使用
         before_status = candidate.status
@@ -260,9 +320,16 @@ async def update_candidate_status(
 async def get_candidate_ai_score(
     candidate_id: str,
     session:Annotated[AsyncSession, Depends(get_db)],
-    _: UserModel = Depends(get_current_user),
+    current_user: UserModel = Depends(get_current_user),
 ):
     async with session.begin():
+        # AI 评分含面试官对候选人的主观评价，属于敏感读取。
+        # 这里必须和列表/下载/改状态/删除用同一套可见性判定，
+        # 否则任何登录用户拿到 candidate_id 就能读走别人的评分。
+        candidate = await CandidateRepo(session).get_for_user(candidate_id, current_user)
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="候选人不存在或无权访问")
+
         score_repo = CandidateAIScoreRepo(session)
         ai_score = await score_repo.get_by_candidate_id(candidate_id)
         if not ai_score:
@@ -287,13 +354,14 @@ async def get_7d_candidate(
 ):
     async with session.begin():
         candidate_repo = CandidateRepo(session)
-        now = now_beijing()
-        # 起始：6 天前的 00:00（naive 北京时间，与库中 created_at 的存储方式一致）
-        start_time = datetime(year=now.year, month=now.month, day=now.day) - timedelta(days=6)
+        # 库里的 created_at 是 naive 北京时间，查询窗口用 db_now() 保持同一种表示形式
+        now = db_now()
+        # 起始：6 天前的 00:00
+        start_time = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
         # 结束：当前时间。
         # 注意：不要用「今天 00:00」当结束时间，否则 `created_at <= end_time` 会把
         # 当天 00:00 之后新增的候选人全部排除，「近 7 天」图表当天那一桶永远是 0。
-        end_time = now.replace(tzinfo=None)
+        end_time = now
         rows = await candidate_repo.candidate_count(
             start_time=start_time,
             end_time=end_time,
@@ -317,13 +385,17 @@ async def delete_candidate(
 ):
     """删除候选人及其关联数据（AI 评分、面试记录）。
 
-    权限：HR 或超级管理员。
+    权限：HR 或超级管理员，且候选人须在该用户的可见范围内（自己管理的部门/自己发布的职位）。
     """
     async with session.begin():
         candidate_repo = CandidateRepo(session)
+        # delete_candidate 只按 id 删，不看归属：不先做可见性校验的话，
+        # 任何 HR 都能删除其它部门的候选人。
+        if await candidate_repo.get_for_user(candidate_id, current_user) is None:
+            raise HTTPException(status_code=404, detail="候选人不存在或无权访问")
         deleted = await candidate_repo.delete_candidate(candidate_id)
         if not deleted:
-            raise HTTPException(status_code=404, detail="候选人不存在")
+            raise HTTPException(status_code=404, detail="候选人不存在或无权访问")
 
     audit(
         "candidate.delete",

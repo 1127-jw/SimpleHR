@@ -56,6 +56,18 @@
                 >修改状态</el-button
               >
               <span class="ml-1"></span>
+              <!-- 人工闸门：只有停在「待人工确认」的候选人才需要（也才允许）发邀请 -->
+              <el-button
+                v-if="scope.row.status === CandidateStatusEnum.PENDING_MANUAL_DECISION"
+                link
+                type="primary"
+                @click="openManualDecision(scope.row)"
+                >发送邮件</el-button
+              >
+              <span
+                v-if="scope.row.status === CandidateStatusEnum.PENDING_MANUAL_DECISION"
+                class="ml-1"
+              ></span>
               <el-button link type="primary" @click="openResume(scope.row)">简历</el-button>
               <span class="ml-1"></span>
               <el-button link type="primary" @click="showAIScore(scope.row)">AI评分</el-button>
@@ -229,6 +241,36 @@
           </span>
         </template>
       </el-dialog>
+
+      <!-- 人工闸门：决定要不要发面试邀请邮件（唤醒暂停的招聘图） -->
+      <el-dialog v-model="manualDialogVisible" title="发送面试邀请" width="440px">
+        <div v-if="manualCandidate" class="space-y-3">
+          <div class="text-sm">
+            候选人 <span class="text-strong">{{ manualCandidate.name }}</span> 已通过 AI
+            评分，流程正停在人工确认环节。
+          </div>
+          <div class="text-sm text-desc">
+            <el-button
+              type="primary"
+              size="small"
+              :loading="manualSubmitting"
+              @click="handleManualDecision('approve')"
+              >发送邮件并继续</el-button
+            >
+            <el-button
+              type="danger"
+              plain
+              size="small"
+              :loading="manualSubmitting"
+              @click="handleManualDecision('reject')"
+              >不发送，淘汰</el-button
+            >
+          </div>
+          <div class="text-xs text-muted">
+            「发送邮件」会继续协商面试时间的流程；「不发送」会把候选人置为 AI 筛选失败。
+          </div>
+        </div>
+      </el-dialog>
     </div>
   </div>
 </template>
@@ -242,6 +284,7 @@ import {
   updateCandidateStatus,
   downloadCandidateResume,
   deleteCandidate,
+  submitManualDecision,
 } from '@/apis/candidate_api'
 import type { Candidate, CandidateAIScore } from '@/apis/candidate_api'
 import { CandidateStatusEnum, ALLOWED_TRANSITIONS } from '@/apis/candidate_api'
@@ -373,6 +416,31 @@ const submitStatus = async () => {
   }
 }
 
+// 人工闸门：决定要不要发面试邀请邮件（唤醒暂停的招聘图）
+const manualDialogVisible = ref(false)
+const manualSubmitting = ref(false)
+const manualCandidate = ref<Candidate | null>(null)
+
+const openManualDecision = (candidate: Candidate) => {
+  manualCandidate.value = candidate
+  manualDialogVisible.value = true
+}
+
+const handleManualDecision = async (decision: 'approve' | 'reject') => {
+  if (!manualCandidate.value) return
+  try {
+    manualSubmitting.value = true
+    await submitManualDecision(manualCandidate.value.id, decision)
+    ElMessage.success(decision === 'approve' ? '已发送面试邀请' : '已淘汰该候选人')
+    manualDialogVisible.value = false
+    await fetchCandidates()
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail ?? '操作失败，请稍后重试')
+  } finally {
+    manualSubmitting.value = false
+  }
+}
+
 const fetchCandidates = async () => {
   try {
     const response = await getCandidates({
@@ -422,6 +490,8 @@ const getStatusTagType = (status: string): string => {
       return 'danger'
     case '处理异常':
       return 'danger'
+    case '待人工确认':
+      return 'warning'
     default:
       return 'default'
   }

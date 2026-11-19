@@ -17,12 +17,57 @@ DEFAULT_MAX_NEGOTIATION_ROUNDS: int = settings.MAX_NEGOTIATION_ROUNDS
 EMAIL_REPLY_TIMEOUT: str = settings.EMAIL_REPLY_TIMEOUT
 
 # === 候选人邮件回复的语义标记 ===
-# 由 check_availability 节点写入，由 candidate_graph 的路由函数读取。
+# 由节点写入，由 candidate_graph 的路由函数读取。
 # 两端共用同一份常量，避免改一处漏一处。
 REPLY_REFUSED: str = "CANDIDATE_REFUSED"
 REPLY_TIME_AVAILABLE: str = "SYSTEM_TIME_AVAILABLE"
+# 复核节点：候选人确认的时段在创建日程前被面试官的其他日程占用
+REPLY_SLOT_TAKEN: str = "SYSTEM_SLOT_TAKEN"
 
-assign_state_property = lambda x, y: y if y is not None else x
+# === 人工闸门（manual_decision）的回复值 ===
+# 由前端「发送邮件 / 不发送」两个动作传入 Command(resume=...)，
+# 节点据此决定继续发邀请还是淘汰。
+MANUAL_DECISION_APPROVE: str = "approve"
+MANUAL_DECISION_REJECT: str = "reject"
+
+# === 中断点标记 ===
+# ``interrupt(value)`` 的 ``value`` 会原样出现在 ``StateSnapshot.interrupts`` 里。
+# 所有 ``interrupt()`` 节点**共用一个 resume 通道**：谁都能用 ``Command(resume=...)``
+# 把任何一个中断点唤醒。恢复方必须用下面的标记确认「这个中断点是我该处理的那个」，
+# 否则就会互相误开——实测过：人工闸门被超时巡检用 "TIMEOUT" 唤醒，
+# 候选人当场被判成「不发送」并淘汰。
+EMAIL_REPLY_INTERRUPT: str = "candidate_email_reply"
+MANUAL_DECISION_INTERRUPT: str = "manual_decision"
+
+
+def is_waiting_on(interrupts, marker: str) -> bool:
+    """当前挂起的中断点是否属于 ``marker`` 对应的节点。
+
+    Args:
+        interrupts: ``StateSnapshot.interrupts``（``tuple[Interrupt, ...]``）。
+        marker: ``EMAIL_REPLY_INTERRUPT`` 或 ``MANUAL_DECISION_INTERRUPT``。
+
+    ``Interrupt`` 只带 ``value``，不带节点名，所以用 ``interrupt()`` 的入参做身份。
+    入参可以是字符串（``interrupt("candidate_email_reply")``）或带 ``node``
+    字段的字典（``interrupt({"node": "manual_decision", ...})``），两者都认。
+    """
+    for it in interrupts or ():
+        value = getattr(it, "value", None)
+        if value == marker:
+            return True
+        if isinstance(value, dict) and value.get("node") == marker:
+            return True
+    return False
+
+# 后写覆盖先写。
+#
+# 不要用 ``y if y is not None else x``：LangGraph 只在**节点确实写了这个字段**时
+# 才调用 reducer，所以「没写」本来就靠默认保留旧值，不需要靠 None 兜底。
+# 反过来把 None 当成「不写」会让显式清空失效——人工重试时
+# （candidate_status_ser）想清掉的 error_message / candidate_email_reply /
+# proposed_interview_time / email_sent_at 全部留在检查点里，下一轮路由读到脏值。
+def assign_state_property(left, right):
+    return right
 
 
 class CandidateRecruitmentState(TypedDict):
@@ -49,6 +94,9 @@ class CandidateRecruitmentState(TypedDict):
     candidate_email_reply: Annotated[Optional[str], assign_state_property]
     proposed_interview_time: Annotated[Optional[datetime], assign_state_property]
 
+    # manual_decision 人工闸门阶段
+    manual_decision: Annotated[Optional[str], assign_state_property]
+
     # confirm 确认阶段
     confirmed_interview_time: Annotated[Optional[datetime], assign_state_property]
     interview_created: Annotated[Optional[bool], assign_state_property]
@@ -56,9 +104,9 @@ class CandidateRecruitmentState(TypedDict):
     # === 流程控制字段 ===
     current_stage: Annotated[
         Literal[
-            "screening", "scoring", "email_invite", "check_availability",
-            "negotiation", "confirmed", "rejected", "refused",
-            "negotiation_expired", "error"
+            "screening", "scoring", "manual_decision", "email_invite",
+            "check_availability", "email_reply", "negotiation", "confirmed",
+            "rejected", "refused", "negotiation_expired", "error"
         ],
         assign_state_property
     ]

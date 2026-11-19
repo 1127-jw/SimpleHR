@@ -103,8 +103,14 @@ class Settings(BaseSettings):
     # ---------- 文件上传 ----------
     RESUME_DIR: str = Field(default=os.path.join(BASE_DIR, "upload"), description="简历上传目录")
 
+    # ---------- API_KEY ----------
+    #OCR
     PADDLE_OCR_ACCESS_TOKEN: str = Field(default="", description="PaddleOCR 访问令牌")
+    #LLM
     DASHSCOPE_API_KEY: str = Field(default="", description="DashScope API Key")
+    BASE_URL:str =  Field(default="", description="DashScope API URL")
+    PRIMARY_MODEL:str =  Field(default="", description="主模型")
+    FALLBACK_MODEL:str =  Field(default="", description="副模型")
 
     # ---------- agent/graph ----------
     GRAPH_OPEN: bool = Field(default=True, description="是否开启图模式")
@@ -119,10 +125,6 @@ class Settings(BaseSettings):
     # 以 EMAIL_REPLY_TIMEOUT 恢复状态图，流转到「协商超时」终态。
     EMAIL_REPLY_TIMEOUT_HOURS: int = Field(
         default=48, ge=1, description="等待候选人回复邮件的超时时间（小时）"
-    )
-    # 超时巡检的执行间隔（分钟）
-    EMAIL_REPLY_SWEEP_INTERVAL_MINUTES: int = Field(
-        default=15, ge=1, description="邮件回复超时巡检间隔（分钟）"
     )
 
     # ---------- 意图识别 ----------
@@ -150,8 +152,71 @@ class Settings(BaseSettings):
     MAIL_SUBMISSION_DEFAULT_POSITION_ID: str = Field(
         default="", description="匹配不到职位时的默认职位，留空则转人工"
     )
-    MAIL_SUBMISSION_SWEEP_INTERVAL_MINUTES: int = Field(
-        default=60, ge=1, description="待确认投递超期巡检间隔（分钟）"
+
+    # ---------- LLM 调用限流 ----------
+    LLM_MAX_CONCURRENCY: int = Field(
+        default=20, ge=1,
+        description="同时在飞的 LLM 调用上限（进程内信号量）；本地 DB 连接池 30 为参考上限",
+    )
+    LLM_RPM_LIMIT: int = Field(
+        default=600, ge=1,
+        description="每分钟 LLM 调用上限（Redis 滑动窗口，0 表示不限）；突发缓冲",
+    )
+
+    # ---------- 任务级并发限流 ----------
+    # 限制"同时运行的完整业务任务数"，与 LLM 调用级限流叠加：
+    # 任务级主要保护下游副作用（钉钉日程 / 邮件 / DB 写），调用级保护模型服务压力。
+    RECRUIT_TASK_MAX_CONCURRENCY: int = Field(
+        default=12, ge=1, description="同时进行的招聘流程（图执行/恢复）数上限"
+    )
+    RESUME_PARSE_MAX_CONCURRENCY: int = Field(
+        default=12, ge=1, description="同时进行的简历解析（OCR + LLM）数上限"
+    )
+    MAIL_ENRICH_MAX_CONCURRENCY: int = Field(
+        default=20, ge=1, description="同时进行的邮件简历后台富化数上限（低优先）"
+    )
+
+    # ---------- 周期任务调度 ----------
+    # 调度模式不再做成三选一的手动开关，改由 DEBUG 推导，
+    # 见文件末尾的 computed_field ``PERIODIC_TASK_MODE``。
+    PERIODIC_TASK_DAILY_TIMES: str = Field(
+        default="08:00,12:00,17:00,24:00",
+        description="每日执行时刻（逗号分隔，24:00 表示次日 0 点）；非 debug 环境生效",
+    )
+    PERIODIC_TASK_DEV_INTERVAL_SECONDS: int = Field(
+        default=15, ge=1, description="debug 模式下的固定执行间隔（秒）"
+    )
+    # 连续「执行失败」（每次已用尽重试）多少次后告警一次；
+    # 默认 3 = 容忍 2 次执行失败，第 3 次才告警（恢复前只告警一次）。
+    PERIODIC_TASK_FAILURE_ALERT_THRESHOLD: int = Field(
+        default=3, ge=1,
+        description="连续执行失败（重试耗尽）多少次后告警一次；默认 3 即容忍 2 次"
+    )
+
+    # 后台任务失败重试：重试属于「一次执行」内部，重试耗尽才记为一次执行失败。
+    BACKGROUND_TASK_RETRY_TIMES: int = Field(
+        default=3, ge=0,
+        description="后台任务每次执行失败后的重试次数（不含首次）；0 表示不重试"
+    )
+    BACKGROUND_TASK_RETRY_BASE_DELAY_SECONDS: float = Field(
+        default=1.0, gt=0,
+        description="重试退避基数（秒）：第 n 次重试前等待 base * 2^(n-1)"
+    )
+    BACKGROUND_TASK_RETRY_MAX_DELAY_SECONDS: float = Field(
+        default=30.0, gt=0, description="单次重试等待上限（秒）"
+    )
+
+    # 后台任务（周期巡检 + 邮件轮询）启动后到「首次执行」的等待秒数。
+    # 默认 2 分钟：既避免应用启动瞬间压一波数据库查询，
+    # 也避免 daily_times 模式下首次任务要等上数小时（最长 8 小时）。
+    BACKGROUND_TASK_STARTUP_DELAY_SECONDS: int = Field(
+        default=120, ge=0,
+        description="后台任务启动后到首次执行的等待秒数（周期巡检与邮件轮询共用）"
+    )
+
+    # 邮件机器人轮询：独立开关，不跟随 DEBUG / 全局调度模式，默认 15 秒一次。
+    MAIL_POLL_INTERVAL_SECONDS: int = Field(
+        default=15, ge=1, description="邮件机器人轮询间隔（秒）"
     )
 
 
@@ -195,6 +260,35 @@ class Settings(BaseSettings):
     @property
     def REDIS_URL(self) -> str:
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+
+    @computed_field
+    @property
+    def PERIODIC_TASK_MODE(self) -> str:
+        """周期巡检的调度模式（取值同 ``app/tasks/scheduler.py`` 的模式常量）。
+
+        简化为两档，不再让运维在三个模式里选：
+
+        * ``debug=True``  → ``dev_interval``：每 ``PERIODIC_TASK_DEV_INTERVAL_SECONDS``
+          （默认 15 秒）跑一轮；
+        * ``debug=False`` → ``daily_times``：按 ``PERIODIC_TASK_DAILY_TIMES``
+          的每日时刻执行。
+
+        用 ``DEBUG`` 而不是 ``ENVIRONMENT`` 推导，是因为「多久跑一次巡检」
+        本质上是「我想不想现在就看到它跑」——本地开发要快，生产要按时刻。
+        """
+        return "dev_interval" if self.debug else "daily_times"
+
+    @computed_field
+    @property
+    def MAIL_POLL_MODE(self) -> str:
+        """邮件轮询的调度模式：固定 ``interval``。
+
+        刻意**不跟随** ``DEBUG`` / ``PERIODIC_TASK_MODE``：邮件轮询是独立开关，
+        间隔由 ``MAIL_POLL_INTERVAL_SECONDS`` 决定（默认 15 秒）。
+        保留这个 computed field 是为了让模式在 ``model_dump()`` 里可见，
+        与 ``PERIODIC_TASK_MODE`` 保持同一套读法。
+        """
+        return "interval"
 
     @model_validator(mode="after")
     def _validate_secrets(self) -> "Settings":

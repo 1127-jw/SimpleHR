@@ -102,31 +102,30 @@ class HttpRequest {
     }
   }
 
-  public request<T = any>(config: AxiosRequestConfig): Promise<T> {
+  public request<T = unknown>(config: AxiosRequestConfig): Promise<T> {
     return this.instance.request(config) as unknown as Promise<T>
   }
-
-  public get<T = any>(url: string, params?: object, config?: AxiosRequestConfig): Promise<T> {
+  public get<T = unknown>(url: string, params?: object, config?: AxiosRequestConfig): Promise<T> {
     return this.request({ ...config, url, method: 'GET', params })
   }
 
-  public post<T = any>(url: string, data?: object, config?: AxiosRequestConfig): Promise<T> {
+  public post<T = unknown>(url: string, data?: object, config?: AxiosRequestConfig): Promise<T> {
     return this.request({ ...config, url, method: 'POST', data })
   }
 
-  public put<T = any>(url: string, data?: object, config?: AxiosRequestConfig): Promise<T> {
+  public put<T = unknown>(url: string, data?: object, config?: AxiosRequestConfig): Promise<T> {
     return this.request({ ...config, url, method: 'PUT', data })
-  }
+  }   
 
-  public delete<T = any>(url: string, config?: AxiosRequestConfig): Promise<T> {
+  public delete<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T> {
     return this.request({ ...config, url, method: 'DELETE' })
   }
 
-  public patch<T = any>(url: string, data?: object, config?: AxiosRequestConfig): Promise<T> {
+  public patch<T = unknown>(url: string, data?: object, config?: AxiosRequestConfig): Promise<T> {
     return this.request({ ...config, url, method: 'PATCH', data })
   }
 
-  public upload<T = any>(url: string, formData: FormData, config?: AxiosRequestConfig): Promise<T> {
+  public upload<T = unknown>(url: string, formData: FormData, config?: AxiosRequestConfig): Promise<T> {
     return this.request({
       ...config,
       url,

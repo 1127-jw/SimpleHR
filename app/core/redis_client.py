@@ -32,7 +32,16 @@ async def close_redis():
         await pool.disconnect()
 
 
-async def get_redis() -> redis.Redis:
+def get_redis() -> redis.Redis:
+    """返回全局 Redis 客户端（单例）。
+
+    刻意**不是** async：这里只是取一个模块级单例，没有任何 I/O。
+
+    曾经写成 ``async def``，结果三处调用方漏了 await，拿到的 ``r`` 其实是
+    coroutine，一调 ``.set()`` / ``.eval()`` 就报
+    ``'coroutine' object has no attribute 'set'`` —— 超时巡检因此连续失败几十轮。
+    与 ``get_http_client()`` / ``get_checkpointer()`` 保持同一种写法。
+    """
     if redis_client is None:
         raise RuntimeError("Redis 未初始化")
     return redis_client

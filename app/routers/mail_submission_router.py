@@ -10,8 +10,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import audit
-from app.core.auth import get_current_user, get_hr_or_superuser
+from app.core.auth import get_hr_or_superuser
 from app.core.db import get_db
+from app.models.mail_submission import MailSubmissionStatusEnum
 from app.models.user import UserModel
 from app.repository.mail_submission_repo import MailSubmissionRepo
 from app.schemas.response_schema import ResponseSchema
@@ -35,10 +36,17 @@ class RejectSchema(BaseModel):
 @router.get("", summary="邮件投递列表")
 async def list_submissions(
     session: Annotated[AsyncSession, Depends(get_db)],
-    status: str = Query("PENDING", description="PENDING / CONFIRMED / REJECTED / EXPIRED"),
+    status: MailSubmissionStatusEnum = Query(
+        MailSubmissionStatusEnum.PENDING,
+        description="投递状态；非法值返回 422 而不是静默返回空列表",
+    ),
+    page: int = Query(1, ge=1, description="页码，从 1 开始"),
+    size: int = Query(20, ge=1, le=100, description="每页数量，1-100"),
     _: UserModel = Depends(get_hr_or_superuser),
 ):
-    rows = await MailSubmissionRepo(session).list_by_status(status)
+    async with session.begin():
+        repo = MailSubmissionRepo(session)
+        rows, total = await repo.list_by_status_page(status, page=page, size=size)
     return {
         "items": [
             {
@@ -54,7 +62,7 @@ async def list_submissions(
             }
             for r in rows
         ],
-        "total": len(rows),
+        "total": total,
     }
 
 
@@ -66,8 +74,6 @@ async def get_submission(
 ):
     sub = await MailSubmissionRepo(session).get_by_id(submission_id)
     if sub is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="记录不存在")
     # 详情含候选人 PII（姓名/邮箱/电话/简历附件），属于敏感读取
     audit(
@@ -97,7 +103,7 @@ async def confirm(
     payload: ConfirmSchema,
     background_tasks: BackgroundTasks,
     session: Annotated[AsyncSession, Depends(get_db)],
-    current_user: UserModel = Depends(get_current_user),
+    current_user: UserModel = Depends(get_hr_or_superuser),
 ):
     try:
         candidate, position, interviewer = await confirm_mail_submission(
@@ -129,7 +135,7 @@ async def reject(
     submission_id: str,
     session: Annotated[AsyncSession, Depends(get_db)],
     payload: Optional[RejectSchema] = None,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: UserModel = Depends(get_hr_or_superuser),
 ):
     await reject_mail_submission(session, submission_id, current_user, payload.note if payload else "")
     audit(

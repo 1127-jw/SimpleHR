@@ -186,21 +186,40 @@ async def _resume_candidate_graph(
         return
 
     candidate_graph = build_candidate_graph(get_checkpointer())
-    await candidate_graph.ainvoke(
-        Command(
-            resume=(
-                "候选人回复了以下邮件，请根据回复内容决定下一步操作：\n\n"
-                f"主题：{email.subject}\n\n内容：{email.text}"
-            ),
-            update={
-                # 刷新候选人/职位/面试官信息（防止检查点中的旧数据）
-                "candidate": candidate_schema,
-                "position": position_schema,
-                "interviewer": interviewer_schema,
-            },
-        ),
-        config={"configurable": {"thread_id": thread_id}},
-    )
+    from app.core.limiters import task_slot
+    from app.service.candidate_status_ser import mark_candidate_error
+
+    # 与启动流程共用 "recruit" 名额：限制同时进行的招聘流程总数
+    try:
+        async with task_slot("recruit", settings.RECRUIT_TASK_MAX_CONCURRENCY):
+            # 恢复侧是唯一需要 thread_id 的地方：挂起在哪个节点、又被哪次 resume
+            # 唤醒，只有这条日志能把两者对上（失败路径原本就带 thread_id）
+            logger.info(
+                "[notify] 恢复招聘图 | candidate_id=%s | thread_id=%s",
+                candidate_schema.id, thread_id,
+            )
+            await candidate_graph.ainvoke(
+                Command(
+                    resume=(
+                        "候选人回复了以下邮件，请根据回复内容决定下一步操作：\n\n"
+                        f"主题：{email.subject}\n\n内容：{email.text}"
+                    ),
+                    update={
+                        # 刷新候选人/职位/面试官信息（防止检查点中的旧数据）
+                        "candidate": candidate_schema,
+                        "position": position_schema,
+                        "interviewer": interviewer_schema,
+                    },
+                ),
+                config={"configurable": {"thread_id": thread_id}},
+            )
+    except Exception as e:
+        # 后台链路：异常不会经过 FastAPI 全局处理器，必须就地处理
+        logger.error(
+            "[notify] 恢复图失败 | candidate_id=%s | thread_id=%s | error=%s",
+            candidate_schema.id, thread_id, e, exc_info=True,
+        )
+        await mark_candidate_error(candidate_schema.id, f"恢复招聘图失败: {e}")
 
 
 async def _handle_resume_submission(email: ParsedEmail) -> None:

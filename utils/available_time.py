@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, time
 from typing import List, Tuple, Optional
 
-from utils.time_ISO8601_datatime import BEIJING_TZ
+from app.core.time import BEIJING_TZ, now_beijing
 
 
 def find_available_slot(
@@ -28,7 +28,7 @@ def find_available_slot(
     """
     # 1. 确定开始查找的日期（默认明天）
     if start_date is None:
-        now_bj = datetime.now(BEIJING_TZ)
+        now_bj = now_beijing()
         tomorrow = now_bj.date() + timedelta(days=1)
         current_search_date = datetime.combine(tomorrow, time.min)
     else:

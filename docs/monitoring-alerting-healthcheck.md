@@ -5,6 +5,8 @@
 > 本文只给出「要新增什么、加在哪、怎么配」，**不改动现有业务代码**。所有代码块都是待新增文件 / 待插入片段，落地时按需复制。
 >
 > 与 `docs/ops_plan.md` §4 的关系：本文是它的**可执行展开版**（补全代码、配置、告警规则、看板与验收）。
+>
+> **配套入门教程**：[总览篇](./监控告警教程/00-监控告警健康检查-总览.md) —— 0 基础版，讲清楚「为什么要这么做」，含 5 张图解与 PromQL / LogQL 速查。
 
 ---
 
@@ -306,48 +308,42 @@ EXT_REQUEST_DURATION = Histogram(
     buckets=[0.1, 0.5, 1, 2, 5, 10, 30, 600],
 )
 
-# ==================== 后台任务心跳 ====================
-BG_TASK_LAST_TICK = Gauge(
-    "simplejob_bg_task_last_tick_seconds",
-    "后台任务最后一次心跳的时间戳",
+# ==================== 后台任务调度健康 ====================
+# ⚠️ 不要用固定静默阈值：生产环境 PeriodicTaskManager 走 daily_times
+#    （默认 08:00,12:00,17:00,24:00），最大间隔 8 小时。
+#    阈值必须由任务自己的调度配置推导，见 §2.5。
+BG_TASK_LAST_RUN = Gauge(
+    "simplejob_bg_task_last_run_seconds",
+    "后台任务最后一次【成功】执行的时间戳（失败不更新）",
+    ["job"],
+)
+BG_TASK_EXPECTED_INTERVAL = Gauge(
+    "simplejob_bg_task_expected_interval_seconds",
+    "后台任务的期望执行间隔（由调度配置推导）",
+    ["job"],
+)
+BG_TASK_CONSECUTIVE_FAILURES = Gauge(
+    "simplejob_bg_task_consecutive_failures",
+    "后台任务连续失败次数",
     ["job"],
 )
 
-# 由自定义 Collector 根据「最近心跳时间」推导，见文件末尾
-_BG_LAST_TICK: dict[str, float] = {}
-_BG_MAX_SILENCE_SECONDS = 300.0
+_BG_LAST_RUN: dict[str, float] = {}
 
 
-def heartbeat(job: str) -> None:
-    """后台任务每轮循环调用一次；并由 Collector 推导 alive 指标。"""
-    now = time.time()
-    _BG_LAST_TICK[job] = now
-    BG_TASK_LAST_TICK.labels(job=job).set(now)
+def heartbeat(job: str, expected_interval_seconds: float, ok: bool = True) -> None:
+    """后台任务每轮调用一次。
 
-
-class _BgTaskAliveCollector:
-    """根据最近一次心跳推导 simplejob_bg_task_alive。"""
-
-    def collect(self):
-        metric = GaugeMetricFamily(
-            "simplejob_bg_task_alive",
-            "后台任务是否存活（1=存活，0=超时未心跳）",
-            labels=["job"],
-        )
+    Args:
+        expected_interval_seconds: 相邻两次执行的最大间隔（秒）。
+            interval 模式 = 配置间隔 × 60；daily_times 模式 = 时刻表最大间隔。
+        ok: 本轮是否成功。False 时只更新期望间隔，不刷新成功时间。
+    """
+    BG_TASK_EXPECTED_INTERVAL.labels(job=job).set(expected_interval_seconds)
+    if ok:
         now = time.time()
-        for job, ts in _BG_LAST_TICK.items():
-            metric.add_metric([job], 1.0 if now - ts < _BG_MAX_SILENCE_SECONDS else 0.0)
-        yield metric
-
-
-def register_custom_metrics() -> None:
-    """把自定义 Collector 注册到默认 Registry（幂等）。"""
-    from prometheus_client import REGISTRY
-
-    try:
-        REGISTRY.register(_BgTaskAliveCollector())
-    except ValueError:
-        pass   # 重复注册（热重载）时忽略
+        _BG_LAST_RUN[job] = now
+        BG_TASK_LAST_RUN.labels(job=job).set(now)
 
 
 # ==================== 日志队列（项目特有） ====================
@@ -365,8 +361,6 @@ CANDIDATE_STATUS = Gauge(
 ```python
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from app.core.metrics import register_custom_metrics
-
 def create_app() -> FastAPI:
     app = FastAPI(...)
 
@@ -378,7 +372,6 @@ def create_app() -> FastAPI:
     Instrumentator(excluded_urls="/metrics,/healthz,/readyz,/startupz").instrument(
         app
     ).expose(app, endpoint="/metrics", include_in_schema=False)
-    register_custom_metrics()
 
     @app.get("/")
     async def root():
@@ -420,37 +413,144 @@ async def request(service: str, method: str, url: str, **kwargs):
         EXT_REQUEST_DURATION.labels(service=service).observe(time.perf_counter() - start)
 ```
 
-### 2.5 后台任务心跳（本项目重点）
+### 2.5 后台任务健康（本项目重点）
 
-`TimeoutSweepManager` 与 `MailManager` 与 API 同进程（gunicorn 单 worker），**进程活着 ≠ 任务在跑**。加心跳：
+`TimeoutSweepManager` 与 `MailManager` 与 API 同进程（gunicorn 单 worker），**进程活着 ≠ 任务在跑**。
+
+#### 2.5.1 先看清调度模式（关键前提）
+
+调度策略集中在 `app/tasks/scheduler.py`，`PeriodicTaskManager`（周期巡检）与
+`MailPollTimer`（邮件轮询，`app/tasks/mail_poll_loop.py`）共用：
+
+| 模式 | 行为 | 间隔 |
+|---|---|---|
+| `dev_interval` | `DEBUG=True` 时的固定短间隔 | `PERIODIC_TASK_DEV_INTERVAL_SECONDS`（默认 15 秒） |
+| `daily_times` | `DEBUG=False` 时的每日时刻 | 默认 `08:00,12:00,17:00,24:00`，**最大间隔 8 小时** |
+| `interval` | 仅邮件轮询使用 | `MAIL_POLL_INTERVAL_SECONDS`（默认 15 秒） |
+
+> 调度模式不再做成手动三选一，改由配置层的 computed field 给出：
+> `Settings.PERIODIC_TASK_MODE`（`DEBUG` → `dev_interval`，否则 `daily_times`）
+> 与 `Settings.MAIL_POLL_MODE`（恒为 `interval`）。
+
+> ⚠️ **不要用固定静默阈值（如 300 秒）判断存活**：生产环境按每日时刻执行，
+> 最大间隔 8 小时（`24:00 → 次日 08:00`），固定阈值会让「存活」指标几乎恒为 0，
+> 告警变成永久误报。
+>
+> ⚠️ **`_run_once()` 失败会被 `except` 吞掉并继续循环**，所以心跳照常刷新也**查不出任务失败**，
+> 必须同时暴露连续失败次数。
+>
+> ⚠️ **首次执行不要等一整个周期**：循环的第一句等待改用
+> `BACKGROUND_TASK_STARTUP_DELAY_SECONDS`（默认 2 分钟），否则 `daily_times` 模式下
+> 首次巡检要等最长 **8 小时**，这段空窗期反而会误触发 `BgTaskNotRunning`。
+
+#### 2.5.2 埋点（阈值由调度配置推导）
 
 ```python
-# app/tasks/timeout_tasks.py（在 _sweep_loop 每轮开头）
+# app/tasks/timeout_tasks.py —— TimeoutSweepManager._run_once
 from app.core.metrics import heartbeat
-...
-async def _sweep_loop() -> None:
-    await asyncio.sleep(interval_seconds)
-    while True:
-        heartbeat("email-reply-timeout-sweep")     # ← 新增
-        try:
-            swept = await sweep_stale_email_replies()
-            ...
-        await asyncio.sleep(interval_seconds)
+
+@classmethod
+async def _run_once(cls) -> None:
+    expected = cls._max_interval_seconds()      # 由 _next_delay_seconds() 推导最大间隔
+    try:
+        swept = await sweep_stale_email_replies()
+    except Exception:
+        heartbeat("email-reply-timeout-sweep", expected, ok=False)
+        raise
+    heartbeat("email-reply-timeout-sweep", expected, ok=True)
+    if swept:
+        logger.info("邮件回复超时巡检：已推进 %s 个候选人", swept)
 ```
 
 ```python
-# app/tasks/mail_submission_tasks.py（MailSubmissionSweepManager 的循环里）
-heartbeat("mail-submission-sweep")                 # ← 新增
+# app/tasks/mail_submission_tasks.py —— MailSubmissionSweepManager._run_once
+@classmethod
+async def _run_once(cls) -> None:
+    expected = cls._max_interval_seconds()
+    try:
+        expired = await expire_stale_submissions()
+    except Exception:
+        heartbeat("mail-submission-sweep", expected, ok=False)
+        raise
+    heartbeat("mail-submission-sweep", expected, ok=True)
+    if expired:
+        logger.info("待确认投递巡检：置为 EXPIRED %s 条", expired)
 ```
 
 ```python
-# utils/emailbot/mail_manager.py（APScheduler job 每轮开头）
-from app.core.metrics import heartbeat
-...
-async def _poll_job():
-    heartbeat("mail-manager")                      # ← 新增
-    ...
+# utils/emailbot/mail_manager.py —— MailManager._poll_once（只含业务动作）
+@classmethod
+async def _poll_once(cls) -> None:
+    mgr = cls.get()
+    try:
+        await mgr._bot.poll_once()
+    except Exception:
+        heartbeat("mail-manager", MailPollTimer.max_interval_seconds(), ok=False)
+        logger.exception("poll round crashed, will retry")
+        return
+    heartbeat("mail-manager", MailPollTimer.max_interval_seconds(), ok=True)
 ```
+
+> **计时器已单独抽到 `app/tasks/mail_poll_loop.py`（`MailPollTimer`）**，
+> 与 `PeriodicTaskManager` 共用 `app/tasks/scheduler.py` 的调度策略，
+> 但邮件是**独立开关**：恒为固定间隔 `MAIL_POLL_INTERVAL_SECONDS`（默认 **15 秒**），
+> 既不看 `DEBUG` 也不跟随全局 `PERIODIC_TASK_MODE`。
+>
+> `expected` 统一取 `MailPollTimer.max_interval_seconds()`，不要自己算——
+> 邮件是固定 15 秒；周期巡检在 `daily_times` 下是 **8 小时**（`24:00 → 次日 08:00`）。
+
+> `_max_interval_seconds()` 的实现已落地在 `PeriodicTaskManager`：
+> `dev_interval` 模式直接返回配置值；`daily_times` 模式把 `PERIODIC_TASK_DAILY_TIMES`
+> 排序后取相邻间隔的最大值（含首尾跨天），避免生产环境误报。
+
+#### 2.5.3 失败重试 + 连续失败计数暴露成指标
+
+**重试属于「一次执行」内部**：每次调度执行最多尝试 `1 + BACKGROUND_TASK_RETRY_TIMES`
+次（默认 4 次），重试耗尽才记为一次「执行失败」。
+
+```python
+# app/tasks/retry.py
+async def run_with_retry(fn, *, retries=3, base_delay=1.0, max_delay=30.0, on_retry=None):
+    """失败后按指数退避重试；返回 None 表示成功，否则为耗尽时的最后一个异常。"""
+```
+
+```python
+# app/tasks/periodic_task.py —— _loop 内
+from app.tasks.retry import run_with_retry
+
+        while True:
+            last_exc = await run_with_retry(
+                cls._run_once,
+                retries=settings.BACKGROUND_TASK_RETRY_TIMES,
+                base_delay=settings.BACKGROUND_TASK_RETRY_BASE_DELAY_SECONDS,
+                max_delay=settings.BACKGROUND_TASK_RETRY_MAX_DELAY_SECONDS,
+                on_retry=cls._on_retry,
+            )
+            if last_exc is None:
+                cls._on_success()
+            else:
+                cls._on_failure(last_exc)      # 重试耗尽 → 记一次「执行失败」
+            await asyncio.sleep(cls._next_delay_seconds())
+```
+
+**告警阈值**：`PERIODIC_TASK_FAILURE_ALERT_THRESHOLD` 默认 **3**
+（即**容忍 2 次执行失败**，第 3 次才告警，恢复前只报一次）。
+
+达到阈值时打一条带固定关键字的 ERROR 日志（供 Loki 日志告警匹配）：
+
+```text
+[bg_task_alert]邮件回复超时巡检连续 3 次执行失败（每次已重试 3 次，阈值 3），需人工介入；恢复前不再重复告警
+```
+
+把计数同步成指标：
+
+```python
+# app/tasks/periodic_task.py —— _on_failure / _on_success 内
+from app.core.metrics import BG_TASK_CONSECUTIVE_FAILURES
+BG_TASK_CONSECUTIVE_FAILURES.labels(job=cls._task_name).set(cls._consecutive_failures)
+```
+
+#### 2.5.4 日志链路健康（项目特有）
 
 ```python
 # 定时采样日志队列（可放在 TimeoutSweepManager 里，或独立 asyncio 任务）
@@ -473,7 +573,7 @@ LOG_LISTENER_ALIVE.set(1 if (_LISTENER_PROCESS and _LISTENER_PROCESS.is_alive())
 | `simplejob_workflow_node_duration_seconds` | Histogram | node | 流程瓶颈 |
 | `simplejob_workflow_node_fail_total` | Counter | node | 节点失败 |
 | `simplejob_external_request_total` / `_duration_seconds` | Counter/Histogram | service, result | OCR/AI/钉钉/邮件 |
-| `simplejob_bg_task_alive` | Gauge | job | 巡检/邮件机器人存活 |
+| `simplejob_bg_task_last_run_seconds` / `_expected_interval_seconds` / `_consecutive_failures` | Gauge | job | 巡检/邮件机器人调度健康（见 §2.5） |
 | `simplejob_log_listener_alive` / `simplejob_log_queue_size` | Gauge | – | 日志链路 |
 | `simplejob_candidate_status_count` | Gauge | status | 业务漏斗 |
 | `pg_up` / `pg_stat_activity_count` | Gauge | – | 数据库 |
@@ -766,17 +866,36 @@ groups:
         annotations: { summary: "Redis 不可用（登录/限流/巡检锁都会受影响）" }
 
       - alert: MailBotDead
-        expr: simplejob_bg_task_alive{job="mail-manager"} == 0
+        expr: |
+          (time() - simplejob_bg_task_last_run_seconds{job="mail-manager"})
+            > simplejob_bg_task_expected_interval_seconds{job="mail-manager"} * 3
         for: 15m
         labels: { severity: p0 }
         annotations:
-          summary: "邮件机器人心跳丢失，面试协商邮件已停摆"
+          summary: "邮件机器人超过 3 个周期没有成功轮询，面试协商邮件已停摆"
 
-      - alert: SweepDead
-        expr: simplejob_bg_task_alive{job=~"email-reply-timeout-sweep|mail-submission-sweep"} == 0
+      - alert: BgTaskNotRunning
+        expr: |
+          (time() - simplejob_bg_task_last_run_seconds)
+            > simplejob_bg_task_expected_interval_seconds * 3
         for: 10m
         labels: { severity: p1 }
-        annotations: { summary: "后台巡检任务已停止" }
+        annotations:
+          summary: "后台任务 {{ $labels.job }} 超过 3 个周期没有成功执行"
+
+      - alert: BgTaskFailing
+        # 「执行失败」= 重试耗尽；阈值 3 = 容忍 2 次执行失败
+        expr: simplejob_bg_task_consecutive_failures >= 3
+        for: 15m
+        labels: { severity: p1 }
+        annotations:
+          summary: "后台任务 {{ $labels.job }} 已连续 3 次执行失败（每次均已重试）"
+
+# 日志告警（无需 prometheus-client，Loki Ruler 直接匹配告警关键字）
+#   - alert: BgTaskRetryExhausted
+#     expr: sum(count_over_time({job="simplejob"} |= "[bg_task_alert]" [5m])) > 0
+#     labels: { severity: p1 }
+#     annotations: { summary: "后台任务重试耗尽，连续执行失败已达阈值" }
 
   # ==================== 错误与延迟 ====================
   - name: simplejob-performance
@@ -1105,7 +1224,10 @@ providers:
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "expr": "simplejob_bg_task_alive", "legendFormat": "{{ job }}" }
+        {
+          "expr": "(time() - simplejob_bg_task_last_run_seconds) > simplejob_bg_task_expected_interval_seconds * 3",
+          "legendFormat": "{{ job }}"
+        }
       ],
       "fieldConfig": {
         "defaults": {
@@ -1453,7 +1575,9 @@ spec:
 - [ ] `docker compose ps` 全部 healthy；杀 app 能自动拉起
 - [ ] 停 PG/Redis → 告警 1 分钟内到达钉钉
 - [ ] 杀日志监听进程 → `LogListenerDead` 触发
-- [ ] 邮件机器人心跳丢失 → `MailBotDead` 触发
+- [ ] 邮件机器人超过 3 个周期未成功轮询 → `MailBotDead` 触发
+- [ ] 巡检任务停摆 / 连续失败 → `BgTaskNotRunning` / `BgTaskFailing` 触发
+- [ ] `daily_times` 模式下**不会**因固定阈值误报（生产环境验证）
 - [ ] Grafana 能同时看到 RED、依赖、业务分布、后台任务
 - [ ] 合成监控断网/停服可告警
 - [ ] 每条告警有 Runbook，关键字已覆盖
@@ -1481,7 +1605,9 @@ spec:
 
 ```
 app/routers/health_router.py          # 健康检查
-app/core/metrics.py                   # 指标定义 + 后台任务心跳
+app/tasks/scheduler.py                # 调度策略（模式/延迟/最大间隔）
+app/tasks/mail_poll_loop.py           # 邮件轮询计时器（替代 APScheduler）
+app/core/metrics.py                   # 指标定义 + 后台任务调度健康
 app/core/tracing.py                   # OpenTelemetry 初始化
 deploy/prometheus/prometheus.yml
 deploy/prometheus/alerts.yml
@@ -1513,7 +1639,9 @@ app/routers/user_router.py            # 登录失败计数
 app/workflow/error_handler.py         # 节点失败/耗时
 app/tasks/timeout_tasks.py            # heartbeat("email-reply-timeout-sweep")
 app/tasks/mail_submission_tasks.py    # heartbeat("mail-submission-sweep")
-utils/emailbot/mail_manager.py        # heartbeat("mail-manager")
+app/tasks/periodic_task.py            # 复用 scheduler，暴露 _consecutive_failures
+app/core/config.py                    # MAIL_POLL_INTERVAL_SECONDS / PERIODIC_TASK_*
+utils/emailbot/mail_manager.py        # heartbeat("mail-manager") + 启停计时器
 docker/Dockerfile.backend             # HEALTHCHECK 指向 /healthz
 docker-compose.yml                    # app.healthcheck
 ```
@@ -1532,8 +1660,12 @@ sum(rate(http_requests_total{status=~"5.."}[5m]))
 topk(10, histogram_quantile(0.95,
   sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route)))
 
-# 后台任务是否存活
-simplejob_bg_task_alive
+# 后台任务是否停摆（阈值跟调度配置联动）
+(time() - simplejob_bg_task_last_run_seconds)
+  > simplejob_bg_task_expected_interval_seconds * 3
+
+# 后台任务是否在失败
+simplejob_bg_task_consecutive_failures
 
 # 日志队列趋势
 simplejob_log_queue_size

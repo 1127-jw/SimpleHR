@@ -3,9 +3,8 @@ from datetime import datetime, timedelta, time
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import RunnableWithFallbacks
-from langgraph.types import interrupt
 
-from app.agents.llms import deepseek_llm, qwen_llm
+from app.agents.llms import get_deepseek_llm, get_qwen_llm
 from app.agents.prompts import PROPOSED_TIME_SYSTEM_PROMPT
 from app.core.config import get_settings
 from app.core.exceptions import (
@@ -21,7 +20,7 @@ from app.workflow.candidate_state import (
     REPLY_TIME_AVAILABLE,
 )
 from app.workflow.error_handler import node_error_wrapper
-from utils.time_ISO8601_datatime import BEIJING_TZ, now_beijing
+from app.core.time import from_naive_beijing, now_beijing
 
 settings = get_settings()
 logger = logging.getLogger(settings.NODE_LOGGER_NAME)
@@ -44,8 +43,8 @@ def _build_current_time_text() -> str:
 
 def _build_time_llm() -> RunnableWithFallbacks:
     """构建带 fallback 的结构化时间解析 LLM。"""
-    primary = deepseek_llm.with_structured_output(ProposedTime)
-    fallback = qwen_llm.with_structured_output(ProposedTime)
+    primary = get_deepseek_llm().with_structured_output(ProposedTime)
+    fallback = get_qwen_llm().with_structured_output(ProposedTime)
     return RunnableWithFallbacks(runnable=primary, fallbacks=[fallback])
 
 
@@ -59,8 +58,11 @@ def check_hours(available_slots, proposed_dt, duration, time_window=None):
 
 def check_am_or_pm(available_slots, proposed_dt, duration, time_window: tuple[time, time]):
     win_start, win_end = time_window
-    window_start = datetime.combine(proposed_dt, win_start)
-    window_end = datetime.combine(proposed_dt, win_end)
+    # 必须带上 proposed_dt 的时区：钉钉空闲时段是 aware datetime，
+    # datetime.combine 默认产出 naive，直接比较会抛
+    # "can't compare offset-naive and offset-aware datetimes"。
+    window_start = datetime.combine(proposed_dt, win_start, tzinfo=proposed_dt.tzinfo)
+    window_end = datetime.combine(proposed_dt, win_end, tzinfo=proposed_dt.tzinfo)
     for start, end in available_slots:
         if window_start <= start and end - start >= duration and end <= window_end:
             return True
@@ -88,6 +90,82 @@ DAILY_WINDOWS = {
 }
 
 
+# ==================== 把模糊提议解析成具体面试时间 ====================
+def resolve_interview_slot(
+    strategy_name: str,
+    available_slots,
+    proposed_dt: datetime,
+    duration: timedelta,
+    time_window: tuple[time, time] | None = None,
+) -> datetime | None:
+    """由 LLM 的模糊提议解析出一个**可以直接排进日历**的具体起始时间。
+    * ``hours``：候选人给了准确时间，原样使用（前提是落在某段空闲区间内）；
+    * ``am`` / ``pm``：在对应时间窗里取第一个够长的空闲段的**起点**；
+    * ``all``：当天任意够长的空闲段，取起点。
+
+    Returns:
+        可用的起始时间；没有任何满足条件的空闲段时返回 ``None``。
+    """
+    if strategy_name == "hours":
+        for start, end in available_slots:
+            if start <= proposed_dt and proposed_dt + duration <= end:
+                return proposed_dt
+        return None
+
+    if strategy_name == "all":
+        for start, end in available_slots:
+            if end - start >= duration:
+                return start
+        return None
+
+    if time_window is None:
+        raise NegotiationError(f"策略 {strategy_name} 缺少时间窗配置")
+
+    win_start, win_end = time_window
+    # 窗口必须带上 proposed_dt 的时区：钉钉空闲时段是 aware datetime，
+    # datetime.combine 默认产出 naive，直接比较会抛 TypeError。
+    window_start = datetime.combine(proposed_dt, win_start, tzinfo=proposed_dt.tzinfo)
+    window_end = datetime.combine(proposed_dt, win_end, tzinfo=proposed_dt.tzinfo)
+    for start, end in available_slots:
+        if window_start <= start and end <= window_end and end - start >= duration:
+            return start
+    return None
+
+
+# ==================== 提议时间解析 ====================
+# 提示词要求 "YYYY-MM-DD HH:MM:SS"，但模型偶尔会给出 "T" 分隔、省略秒、
+# 或补上小数秒/时区偏移。这里做归一化，避免一条格式偏差就白白消耗一轮协商。
+_TIME_FORMATS = (
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%d",
+    "%Y/%m/%d %H:%M:%S",
+    "%Y/%m/%d %H:%M",
+)
+
+
+def parse_proposed_time(raw: str) -> datetime:
+    """把模型输出的时间字符串解析成 aware 北京时间。
+
+    Raises:
+        NegotiationError: 所有格式都匹配不上。
+    """
+    text = (raw or "").strip()
+    if not text:
+        raise NegotiationError("候选人提议的时间为空")
+    text = text.replace("T", " ")
+    # 去掉小数秒与 "+08:00" 之类的偏移：日期部分本身已是北京时间字面量
+    text = text.split("+")[0].split("Z")[0].strip()
+    if "." in text:
+        text = text.split(".")[0]
+    for fmt in _TIME_FORMATS:
+        try:
+            return from_naive_beijing(datetime.strptime(text, fmt))
+        except ValueError:
+            continue
+    raise NegotiationError(f"无法解析候选人提议的时间: {raw!r}")
+
+
 async def _extract_time_from_reply(state: CandidateRecruitmentState, reply: str) -> ProposedTime:
     """从邮件正文中提取结构化面试意向（直接 LLM 调用，时间注入 Prompt）。
 
@@ -107,7 +185,10 @@ async def _extract_time_from_reply(state: CandidateRecruitmentState, reply: str)
         HumanMessage(content=f"候选人邮件回复内容：\n{reply}"),
     ]
 
-    result: ProposedTime = await llm.ainvoke(messages)
+    from app.core.limiters import llm_slot
+
+    async with llm_slot("llm:time_parse"):
+        result: ProposedTime = await llm.ainvoke(messages)
     logger.info(
         "[check_avail] LLM parsed | confirm=%s | refused=%s | proposed_time=%s | exactly=%s",
         result.confirm, result.refused, result.proposed_time, result.exactly,
@@ -115,29 +196,52 @@ async def _extract_time_from_reply(state: CandidateRecruitmentState, reply: str)
     return result
 
 
-async def get_candidate_email_reply_node(state: CandidateRecruitmentState):
-    """中断节点：等待候选人邮件回复。"""
-    cid = state["candidate"].id
-    logger.info("[email_reply] waiting for candidate reply | candidate_id=%s", cid)
-    logger.info(
-        "[email_reply] resume thread before interrupt | candidate_id=%s | thread_id=%s",
-        cid, state["candidate"].email,
-    )
+async def _notify_candidate_slot_unavailable(candidate, proposed_dt: datetime) -> None:
+    """best-effort 回信：告知提议时间不可用并请候选人另选。
+    发信失败只记日志、不改变流程推进 —— 回信是体验优化，不能因为它把
+    协商轮次卡住。
+    """
     try:
-        reply = interrupt(value=None)
-    except Exception as e:
-        logger.error("解析候选人邮件回复失败: %s", e)
-        reply = ""
-    if reply is None:
-        reply = ""
+        from utils.emailbot.mail_manager import get_mail_bot_
 
-    return {
-        "candidate_email_reply": reply,
-        "current_stage": "email_reply",
-    }
+        email_bot = get_mail_bot_()
+        if not email_bot.is_connected:
+            await email_bot.connect()
+        body = f"""
+尊敬的{candidate.name}，
+您好！
+感谢您的回复。您提出的面试时间（{proposed_dt.strftime('%Y-%m-%d %H:%M')}）面试官暂时无法安排。
+麻烦您再提供一到两个方便的时间，我们会尽快确认。
+谢谢！
+"""
+        await email_bot.send_email(
+            to=candidate.email,
+            subject="面试时间协商-该时段暂不可用",
+            text=body,
+        )
+        logger.info(
+            "[check_avail] 已回信告知时段不可用 | candidate_id=%s", candidate.id
+        )
+    except Exception:  # noqa: BLE001 - 回信属于增强项，不能拖垮协商推进
+        logger.warning(
+            "[check_avail] 回信告知时段不可用失败（不影响流程推进） | candidate_id=%s",
+            getattr(candidate, "id", None), exc_info=True,
+        )
 
 
-async def can_not_find_available_time(state: CandidateRecruitmentState):
+async def can_not_find_available_time(
+    state: CandidateRecruitmentState,
+    *,
+    notify_candidate: bool = False,
+    proposed_dt: datetime | None = None,
+):
+    """本轮协商失败：递增轮次。
+
+    Args:
+        notify_candidate: 是否给候选人回信。只有「候选人明确提出时间但不可用」
+            时才该回信；空回复 / 未提供时间时发信没有意义。
+        proposed_dt: 被拒绝的具体时间，用于回信正文。
+    """
     candidate = state["candidate"]
     cid = candidate.id
     round_num = state.get("negotiation_round", 0) + 1
@@ -145,21 +249,28 @@ async def can_not_find_available_time(state: CandidateRecruitmentState):
         "[check_avail] cannot find available time | candidate_id=%s | round=%d",
         cid, round_num,
     )
+
+    if notify_candidate and proposed_dt is not None:
+        await _notify_candidate_slot_unavailable(candidate, proposed_dt)
+
     return {
         "current_stage": "negotiation",
         "negotiation_round": round_num,
-        "last_proposed_time": None,
     }
+
+
+# 单场面试时长：同时作为空闲时段的切分粒度（hour_interval），
+# 否则 check_hours 只能命中整点小时的时段，10:45 这类提议会被误判为不可用。
+INTERVIEW_DURATION = timedelta(minutes=30)
 
 
 @node_error_wrapper
 async def check_availability_node(state: CandidateRecruitmentState) -> dict:
     """检查候选人提议时间是否与面试官空闲时间冲突。
 
-    只处理「已提供具体时间」的场景；同意/拒绝/未提供时间的情况由路由函数直接分流。
+    节点内直接分流「拒绝」和「同意原时间」，其余情况才查钉钉空闲时段比对；
+    「未提供时间」走 can_not_find_available_time 递增协商轮次。
     """
-    from utils.emailbot.mail_manager import get_mail_bot_
-
     candidate = state["candidate"]
     interviewer = state["interviewer"]
     cid = candidate.id
@@ -169,7 +280,9 @@ async def check_availability_node(state: CandidateRecruitmentState) -> dict:
 
     # 只处理「已提供具体时间」的场景
     if not reply:
-        return {"current_stage": "negotiation"}
+        # 走 can_not_find_available_time 而不是直接返回：路由会原样回到邮件回复节点，
+        # 不递增 negotiation_round 就永远碰不到轮次上限，协商只能靠 48h 超时巡检收尾。
+        return await can_not_find_available_time(state)
 
     # 1. LLM 提取结构化时间（时间已注入 Prompt，无需工具）
     try:
@@ -186,26 +299,51 @@ async def check_availability_node(state: CandidateRecruitmentState) -> dict:
             "current_stage": "negotiation",
         }
 
-    # 未提供时间
+    # 候选人同意原时间：state["proposed_interview_time"] 是首次邀请时从面试官空闲时段
+    # 里挑出来的，无需再查一次钉钉，直接按「可用」放行进 confirm 分支。
+    # 缺这个分支时「可以，就这个时间」会因 proposed_time 为空被判成协商失败，
+    # 耗尽轮次后走到 negotiation_expired。
+    if pt.confirm:
+        if not state.get("proposed_interview_time"):
+            # 首次邀请时「7 天内无空闲时段」那条分支只发了「能否改到 7 天后」的
+            # 通知，并没有确定任何具体时间。此时候选人回一句「可以」，若原样放行，
+            # confirm_node 读 state["proposed_interview_time"] 会抛 KeyError，
+            # 整条流程落进 error。这种情况必须回到协商，而不是确认。
+            logger.info(
+                "[check_avail] candidate agreed but no proposed time in state "
+                "| candidate_id=%s", cid,
+            )
+            return await can_not_find_available_time(state)
+        logger.info("[check_avail] candidate accepted original time | candidate_id=%s", cid)
+        return {
+            "candidate_email_reply": REPLY_TIME_AVAILABLE,
+            "current_stage": "check_availability",
+        }
+
+    # 未提供时间：回复里没有可用的时间信息，递增协商轮次后继续协商
     if not pt.proposed_time:
         logger.info("[check_avail] no time proposed | candidate_id=%s", cid)
         return await can_not_find_available_time(state)
 
-    # 2. 解析时间
+    # 2. 解析时间：回复里的时间是北京时间字面量，补上时区后才能和
+    #    钉钉空闲时段（aware）比较
     try:
-        proposed_dt = datetime.strptime(pt.proposed_time, "%Y-%m-%d %H:%M:%S")
-        proposed_dt = proposed_dt.replace(tzinfo=BEIJING_TZ)
-    except ValueError as e:
+        proposed_dt = parse_proposed_time(pt.proposed_time)
+    except NegotiationError as e:
         logger.error("[check_avail] invalid time format | candidate_id=%s | error=%s", cid, e)
         return await can_not_find_available_time(state)
 
     # 3. 获取面试官空闲时间
+    #    get_user_available_slots 自己按 interviewer_id 解析 union_id / access_token，
+    #    这里只传「查哪一天、切多细」：从提议日的 00:00 起只查 1 天，
+    #    使日历查询窗口与空闲时段计算窗口对齐（否则会漏掉当天更早的忙碌日程）。
     try:
         available_slots = await get_user_available_slots(
-            access_token=interviewer.access_token,
-            union_id=interviewer.union_id,
-            start_time=proposed_dt,
-            duration=timedelta(minutes=30),
+            interviewer_id=interviewer.id,
+            hour_interval=INTERVIEW_DURATION.total_seconds() / 3600,
+            max_days_to_search=1,
+            start_time=proposed_dt.replace(hour=0, minute=0, second=0, microsecond=0),
+            time_delta=0,
         )
     except DingTalkServiceError as e:
         logger.error("[check_avail] get_available_slots failed | candidate_id=%s | error=%s", cid, e)
@@ -215,28 +353,39 @@ async def check_availability_node(state: CandidateRecruitmentState) -> dict:
         logger.info("[check_avail] no slots found | candidate_id=%s", cid)
         return await can_not_find_available_time(state)
 
-    # 4. 检查时间是否可用
-    duration = timedelta(minutes=30)
-    win_time = DAILY_WINDOWS.get(pt.exactly, None)
-    strategy = CHECK_STRATEGIES.get(str(pt.exactly))
-    if strategy is None:
+    # 4. 解析出可以直接排进日历的具体时间
+    #    「上午/下午/全天」的 proposed_dt 是当日 00:00（仅用于携带日期），
+    #    直接拿它当面试时间会把面试排到零点，必须由窗口内的空闲段反推真实起点。
+    #    exactly 为空时按「精确时间」处理：模型给了 proposed_time 却漏填分类，
+    #    比直接抛 NegotiationError 更合理。
+    strategy_name = str(pt.exactly or "hours")
+    if strategy_name not in CHECK_STRATEGIES:
         raise NegotiationError(
             f"未知面试时间策略: {pt.exactly}，"
             f"支持的策略: {list(CHECK_STRATEGIES.keys())}"
         )
-    is_free = strategy(available_slots, proposed_dt, duration, win_time)
+    win_time = DAILY_WINDOWS.get(strategy_name, None)
 
-    if not is_free:
+    interview_start = resolve_interview_slot(
+        strategy_name, available_slots, proposed_dt, INTERVIEW_DURATION, win_time
+    )
+
+    if interview_start is None:
         logger.info(
             "[check_avail] slot not free | candidate_id=%s | exactly=%s | proposed=%s",
             cid, pt.exactly, proposed_dt,
         )
-        return await can_not_find_available_time(state)
+        return await can_not_find_available_time(
+            state, notify_candidate=True, proposed_dt=proposed_dt
+        )
 
-    # 5. 时间可用，返回结果
-    logger.info("[check_avail] slot available | candidate_id=%s | time=%s", cid, proposed_dt)
+    # 5. 时间可用，返回具体起始时间（而不是 proposed_dt）
+    logger.info(
+        "[check_avail] slot available | candidate_id=%s | exactly=%s | start=%s",
+        cid, pt.exactly, interview_start,
+    )
     return {
-        "candidate_email_reply": "SYSTEM_TIME_AVAILABLE",
-        "proposed_interview_time": proposed_dt,
+        "candidate_email_reply": REPLY_TIME_AVAILABLE,
+        "proposed_interview_time": interview_start,
         "current_stage": "negotiation",
     }

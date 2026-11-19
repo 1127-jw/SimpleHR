@@ -21,6 +21,7 @@ async def lifespan(app: FastAPI):
     setup_logging(level="INFO")
     await init_redis()
     await init_checkpointer()
+
     await MailManager.init(
         imap_host=os.getenv("IMAP_HOST", "imap.163.com"),
         smtp_host=os.getenv("SMTP_HOST", "smtp.163.com"),
@@ -28,7 +29,10 @@ async def lifespan(app: FastAPI):
         email=os.getenv("MAIL_USERNAME"),
         password=os.getenv("MAIL_PASSWORD"),
     )
+
+    # 邮件回复超时巡检的生命周期管理器。
     await TimeoutSweepManager.init()
+    # 待确认投递超期巡检的生命周期管理器
     await MailSubmissionSweepManager.init()
 
     yield

@@ -19,7 +19,6 @@ class MailSubmissionSweepManager(PeriodicTaskManager):
     """待确认投递超期巡检的生命周期管理器。"""
 
     _task_name = "待确认投递巡检"
-    _interval_setting = "MAIL_SUBMISSION_SWEEP_INTERVAL_MINUTES"
 
     @classmethod
     async def _run_once(cls) -> None:

@@ -17,7 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableWithFallbacks
 from pydantic import BaseModel, Field
 
-from app.agents.llms import deepseek_llm, qwen_llm
+from app.agents.llms import get_deepseek_llm, get_qwen_llm
 from app.core.config import get_settings
 from utils.emailbot.models import ParsedEmail
 from utils.emailbot.rules import DEFAULT_RULES, MailRule, RuleAction
@@ -114,8 +114,8 @@ def _get_intent_llm() -> RunnableWithFallbacks:
     """懒加载带降级链的结构化分类模型（与图内节点同一套写法）。"""
     global _intent_llm
     if _intent_llm is None:
-        primary = deepseek_llm.with_structured_output(MailIntentResult)
-        fallback = qwen_llm.with_structured_output(MailIntentResult)
+        primary = get_deepseek_llm().with_structured_output(MailIntentResult)
+        fallback = get_qwen_llm().with_structured_output(MailIntentResult)
         _intent_llm = RunnableWithFallbacks(runnable=primary, fallbacks=[fallback])
     return _intent_llm
 
@@ -130,10 +130,13 @@ def _build_intent_messages(prompt: str) -> list:
 
 async def _classify_with_llm(prompt: str) -> MailIntentResult:
     """单次结构化调用，带超时；模型降级由 RunnableWithFallbacks 负责。"""
-    return await asyncio.wait_for(
-        _get_intent_llm().ainvoke(_build_intent_messages(prompt)),
-        timeout=settings.INTENT_LLM_TIMEOUT_SECONDS,
-    )
+    from app.core.limiters import llm_slot
+
+    async with llm_slot("llm:intent"):
+        return await asyncio.wait_for(
+            _get_intent_llm().ainvoke(_build_intent_messages(prompt)),
+            timeout=settings.INTENT_LLM_TIMEOUT_SECONDS,
+        )
 
 
 # 进程内缓存：相同邮件内容只分类一次（重复轮询 / 重放时零成本）

@@ -14,7 +14,7 @@ from datetime import datetime
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import DateTime, String
 from app.core.config import get_settings
-from utils.time_ISO8601_datatime import now_beijing, to_naive_beijing
+from app.core.time import db_now
 
 from typing import AsyncGenerator
 
@@ -77,9 +77,9 @@ class BaseModel(Base):
         primary_key=True,
         default=lambda: uuid()
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: to_naive_beijing(now_beijing()))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=db_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=lambda: to_naive_beijing(now_beijing()),
-        onupdate=lambda: to_naive_beijing(now_beijing())
+        default=db_now,
+        onupdate=db_now
     )

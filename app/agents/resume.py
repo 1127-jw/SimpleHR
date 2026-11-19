@@ -4,7 +4,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import ModelFallbackMiddleware
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from app.agents.llms import qwen_llm, deepseek_llm
+from app.agents.llms import get_qwen_llm, get_deepseek_llm
 from app.agents.prompts import EXTRACT_CANDIDATE_SYSTEM_PROMPT
 from app.schemas.agent_schema import AgentCandidateSchema
 from app.agents.candidate import get_current_time
@@ -18,10 +18,10 @@ def _get_agent():
     global _agent
     if _agent is None:
         _agent = create_agent(
-            model=deepseek_llm,
+            model=get_deepseek_llm(),
             middleware=[
                 ModelFallbackMiddleware(
-                    first_model=qwen_llm,
+                    first_model=get_qwen_llm(),
                 ),
             ],
             tools=[get_current_time],
@@ -37,15 +37,14 @@ def _get_agent():
     reraise=True,
 )
 async def extract_candidate_info(content: str) -> AgentCandidateSchema:
-    response = await _get_agent().ainvoke({"messages": [{
-        "role": "user",
-        "content": f"原始文本内容为：{content}，请从原始文本中提取候选人信息成JSON格式。"
-    }]})
+    from app.core.config import get_settings
+    from app.core.limiters import task_slot
+
+    # 任务级限流：简历解析走 create_agent（内部可能多轮），按"同时解析几份"来限
+    async with task_slot("resume_parse", get_settings().RESUME_PARSE_MAX_CONCURRENCY):
+        response = await _get_agent().ainvoke({"messages": [{
+            "role": "user",
+            "content": f"原始文本内容为：{content}，请从原始文本中提取候选人信息成JSON格式。"
+        }]})
     logger.debug("大模型解析候选人资料结果%s", response)
     return response['structured_response']
-
-
-# result = agent.invoke(
-#     {"messages": [{"role": "user", "content": "你好"}]}
-# )
-# print(result)

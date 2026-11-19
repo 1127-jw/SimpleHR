@@ -1,6 +1,6 @@
 from typing import cast
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from app.models.mail_submission import MailResumeSubmissionModel
 from . import BaseRepo
@@ -46,6 +46,28 @@ class MailSubmissionRepo(BaseRepo):
             .limit(limit)
         )
         return list(result)
+
+    async def list_by_status_page(
+        self, status: str, *, page: int = 1, size: int = 20
+    ) -> tuple[list[MailResumeSubmissionModel], int]:
+        """按状态分页取投递记录，返回 (本页数据, 总数)。
+
+        ``CONFIRMED`` / ``REJECTED`` 是只增不减的历史数据，列表接口若不分页，
+        每刷新一次都要全表读完再全部塞进响应。
+        """
+        total = await self.session.scalar(
+            select(func.count())
+            .select_from(MailResumeSubmissionModel)
+            .where(MailResumeSubmissionModel.status == status)
+        )
+        result = await self.session.scalars(
+            select(MailResumeSubmissionModel)
+            .where(MailResumeSubmissionModel.status == status)
+            .order_by(MailResumeSubmissionModel.created_at.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+        return list(result), int(total or 0)
 
     async def mark_status(self, submission_id: str, status: str, **fields) -> None:
         await self.session.execute(

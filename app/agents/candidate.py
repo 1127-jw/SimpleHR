@@ -8,7 +8,7 @@ from langchain_core.prompts import PromptTemplate
 
 from typing import Annotated, TypeVar, Optional, cast, Any
 
-from app.agents.llms import qwen_llm, deepseek_llm
+from app.agents.llms import get_qwen_llm, get_deepseek_llm
 from app.agents.prompts import CANDIDATE_PROCESS_SYSTEM_PROMPT, SCORE_FOR_CANDIDATE_SYSTEM_PROMPT, \
     SCORE_FOR_CANDIDATE_USER_PROMPT
 from app.schemas.agent_schema import AgentCandidateScoreSchema
@@ -40,7 +40,7 @@ import json
 logger = logging.getLogger(__name__)
 
 
-from utils.time_ISO8601_datatime import iso8601_to_datetime_beijing, now_beijing, to_naive_beijing
+from app.core.time import from_iso8601, now_beijing, to_naive_beijing
 from utils.available_time import find_available_slot
 
 # from langchain_core.globals import set_debug, set_verbose
@@ -78,10 +78,10 @@ async def score_for_candidate(
 
     # 每次调用创建独立 Agent（原设计，保持不变）
     score_agent = create_agent(
-        model=qwen_llm,
+        model=get_qwen_llm(),
         middleware=[
             ModelFallbackMiddleware(
-                first_model=deepseek_llm,
+                first_model=get_deepseek_llm(),
             ),
         ],
         system_prompt=SCORE_FOR_CANDIDATE_SYSTEM_PROMPT,
@@ -158,7 +158,7 @@ async def get_access_token(
             union_id = dingding_user.union_id
 
     try:
-        r = await get_redis()
+        r = get_redis()
         access_token_info = await get_user_access_token(interviewer.id, r)
     except Exception as e:
         logger.error("获取钉钉 access_token 失败: %s", e)
@@ -177,9 +177,8 @@ async def get_interviewer_available_slot(
     interviewer: UserSH = runtime.state['interviewer']
     union_id, access_token_info = await get_access_token(interviewer)
 
-    now = now_beijing()
-    tomorrow_nine = datetime(
-        year=now.year, month=now.month, day=now.day, hour=9
+    tomorrow_nine = now_beijing().replace(
+        hour=9, minute=0, second=0, microsecond=0
     ) + timedelta(days=1)
 
     try:
@@ -191,8 +190,8 @@ async def get_interviewer_available_slot(
         )
         busy_slots = [
             (
-                iso8601_to_datetime_beijing(event['start']['dateTime']),
-                iso8601_to_datetime_beijing(event['end']['dateTime']),
+                from_iso8601(event['start']['dateTime']),
+                from_iso8601(event['end']['dateTime']),
             )
             for event in events
         ]
@@ -276,7 +275,7 @@ async def confirm_interview_time(
     interviewer = runtime.state['interviewer']
 
     try:
-        interview_datetime: datetime = iso8601_to_datetime_beijing(interview_datetime_str)
+        interview_datetime: datetime = from_iso8601(interview_datetime_str)
         interview_datetime_without_tz = to_naive_beijing(interview_datetime)
     except Exception as e:
         raise InterviewSchedulingError(
@@ -288,7 +287,7 @@ async def confirm_interview_time(
     body = f"""
 "尊敬的{candidate.name}，
 面试时间已确定：
-{interview_datetime_str}
+{interview_datetime.strftime("%Y-%m-%d %H:%M")}（北京时间）
 请您准时参加面试。该邮件无需再回复。谢谢！
 """
     from utils.emailbot.mail_manager import get_mail_bot_
@@ -426,7 +425,7 @@ class CandidateProcessAgent:
     async def ainvoke(self,messages:list[BaseMessage],thread_id:str):
         assert self._checkpointer is not None
         agent = create_agent(
-            model=qwen_llm,
+            model=get_qwen_llm(),
             tools=[
                 score_for_candidate,
                 get_interviewer_available_slot,
@@ -439,10 +438,10 @@ class CandidateProcessAgent:
             state_schema=cast(type[AgentState], CandidateAgentState),
             middleware=[
                 ModelFallbackMiddleware(
-                    first_model=deepseek_llm,
+                    first_model=get_deepseek_llm(),
                 ),
                 SummarizationMiddleware(
-                    model=deepseek_llm,
+                    model=get_deepseek_llm(),
                     trigger=("tokens", 50000),
                     keep=("tokens", 10000),
                 ),

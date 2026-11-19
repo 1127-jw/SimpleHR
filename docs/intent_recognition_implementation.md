@@ -1032,7 +1032,7 @@ from app.schemas.candidate_schema import CandidateSchema
 from app.schemas.position_schema import PositionSchema
 from app.schemas.user_schema import UserSH
 from utils.emailbot.models import ParsedEmail
-from utils.time_ISO8601_datatime import now_beijing, to_naive_beijing
+from app.core.time import db_now
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -1108,7 +1108,7 @@ async def confirm_mail_submission(
             submission_id, MailSubmissionStatusEnum.CONFIRMED,
             position_id=position_id, resume_id=resume.id,
             reviewer_id=current_user.id,
-            reviewed_at=to_naive_beijing(now_beijing()),
+            reviewed_at=db_now(),
         )
 
     # 会话内转 Schema（create_candidate 已带 eager 关联）
@@ -1124,7 +1124,7 @@ async def reject_mail_submission(session: AsyncSession, submission_id: str,
     await repo.mark_status(
         submission_id, MailSubmissionStatusEnum.REJECTED,
         reviewer_id=current_user.id,
-        reviewed_at=to_naive_beijing(now_beijing()),
+        reviewed_at=db_now(),
         review_note=note,
     )
 
@@ -1133,7 +1133,7 @@ async def expire_stale_submissions() -> int:
     """定时任务：超期 PENDING → EXPIRED，返回处理条数。"""
     from datetime import timedelta
 
-    deadline = to_naive_beijing(now_beijing()) - timedelta(
+    deadline = db_now() - timedelta(
         days=settings.MAIL_SUBMISSION_EXPIRE_DAYS
     )
     async with AsyncSessionFactory() as session:

@@ -39,6 +39,8 @@ class CandidateStatusEnum(StrEnum):
     NEGOTIATION_EXPIRED = "协商超时"
     # 12. 处理异常（基础设施故障，可重试）
     PROCESSING_ERROR = "处理异常"
+    # 13. 待人工确认（AI 评分通过后、发送邀请邮件前的人工闸门）
+    PENDING_MANUAL_DECISION = "待人工确认"
 
 
 class GenderEnum(StrEnum):

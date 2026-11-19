@@ -9,6 +9,7 @@
 """
 import asyncio
 import logging
+import uuid
 from datetime import timedelta
 
 from langgraph.types import Command
@@ -18,10 +19,15 @@ from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
 from app.core.redis_client import get_redis
 from app.repository.resume_repo import CandidateRepo
+from app.service.candidate_status_ser import mark_candidate_error
 from app.tasks.periodic_task import PeriodicTaskManager
 from app.workflow.candidate_graph import build_candidate_graph
-from app.workflow.candidate_state import EMAIL_REPLY_TIMEOUT
-from utils.time_ISO8601_datatime import now_beijing, to_naive_beijing
+from app.workflow.candidate_state import (
+    EMAIL_REPLY_INTERRUPT,
+    EMAIL_REPLY_TIMEOUT,
+    is_waiting_on,
+)
+from app.core.time import db_now
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -31,6 +37,15 @@ _SWEEP_LOCK_KEY = "sweep:email_reply_timeout"
 _SWEEP_LOCK_TTL_SECONDS = 1800
 # 单轮最多处理多少个候选人，避免一次扫全场
 _SWEEP_BATCH_LIMIT = 200
+
+# 释放锁必须校验持有者：直接 DEL 会在「本轮超时（>TTL）而别的 worker 已重新加锁」
+# 时删掉别人的锁，两个巡检于是并发跑同一批候选人，各自 resume 同一个 thread。
+_SWEEP_LOCK_RELEASE_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
 
 
 async def sweep_stale_email_replies() -> int:
@@ -49,15 +64,17 @@ async def sweep_stale_email_replies() -> int:
         logger.warning("Redis 未初始化，跳过本轮邮件回复超时巡检")
         return 0
 
-    # 跨 worker 互斥：抢不到锁说明已有实例在跑
-    if not await r.set(_SWEEP_LOCK_KEY, "1", nx=True, ex=_SWEEP_LOCK_TTL_SECONDS):
+    # 跨 worker 互斥：抢不到锁说明已有实例在跑。
+    # 锁值用一次性 token，释放时校验，避免误删别的实例重新获取的锁。
+    lock_token = uuid.uuid4().hex
+    if not await r.set(
+        _SWEEP_LOCK_KEY, lock_token, nx=True, ex=_SWEEP_LOCK_TTL_SECONDS
+    ):
         logger.debug("邮件回复超时巡检已由其他 worker 持有，跳过本轮")
         return 0
 
     try:
-        cutoff = to_naive_beijing(
-            now_beijing() - timedelta(hours=settings.EMAIL_REPLY_TIMEOUT_HOURS)
-        )
+        cutoff = db_now() - timedelta(hours=settings.EMAIL_REPLY_TIMEOUT_HOURS)
 
         async with AsyncSessionFactory() as session:
             async with session.begin():
@@ -78,42 +95,56 @@ async def sweep_stale_email_replies() -> int:
         for candidate in candidates:
             config = {"configurable": {"thread_id": candidate.email}}
             try:
-                # 仅当中断点仍在等待恢复时才 resume，避免误伤已完成 / 未启动的 thread
+                # 仅当挂起的是「等待候选人回复」这个中断点时才 resume。
+                # 只看「有没有中断点」是不够的：图里还有其他 interrupt 节点
+                # （人工闸门），用 TIMEOUT 去 resume 它们会把人直接判成淘汰。
                 snapshot = await candidate_graph.aget_state(config)
-                if not snapshot.interrupts:
+                if not is_waiting_on(snapshot.interrupts, EMAIL_REPLY_INTERRUPT):
                     logger.info(
-                        "[timeout_sweep] thread 无待处理 interrupt，跳过 | candidate_id=%s",
+                        "[timeout_sweep] 中断点不是等待候选人回复，跳过 | candidate_id=%s",
                         candidate.id,
                     )
                     continue
 
-                await candidate_graph.ainvoke(
-                    Command(resume=EMAIL_REPLY_TIMEOUT), config
-                )
+                from app.core.limiters import task_slot
+
+                # 超时恢复也占用 "recruit" 名额，避免巡检批量恢复时挤占并发
+                async with task_slot("recruit", settings.RECRUIT_TASK_MAX_CONCURRENCY):
+                    # 恢复侧打 thread_id：与挂起处的日志配对，定位「谁被唤醒了」
+                    logger.info(
+                        "[timeout_sweep] 恢复超时的招聘图 | candidate_id=%s | thread_id=%s",
+                        candidate.id, candidate.email,
+                    )
+                    await candidate_graph.ainvoke(
+                        Command(resume=EMAIL_REPLY_TIMEOUT), config
+                    )
                 swept += 1
                 logger.info(
                     "[timeout_sweep] 已推进到协商超时 | candidate_id=%s | email=%s",
                     candidate.id, candidate.email,
                 )
-            except Exception:
+            except Exception as e:
                 logger.exception(
                     "[timeout_sweep] 推进失败 | candidate_id=%s | email=%s",
                     candidate.id, candidate.email,
+                )
+                # 后台链路：异常不会经过全局处理器，就地标记为可重试
+                await mark_candidate_error(
+                    candidate.id, f"超时推进失败: {e}"
                 )
 
         return swept
     finally:
         try:
-            await r.delete(_SWEEP_LOCK_KEY)
-        except Exception:  # noqa: BLE001 - 清理失败不影响主流程
-            pass
+            await r.eval(_SWEEP_LOCK_RELEASE_LUA, 1, _SWEEP_LOCK_KEY, lock_token)
+        except Exception:  # noqa: BLE001 - 清理失败不影响主流程（锁会自然过期）
+            logger.warning("释放巡检锁失败，等待 TTL 自动过期", exc_info=True)
 
 
 class TimeoutSweepManager(PeriodicTaskManager):
     """邮件回复超时巡检的生命周期管理器。"""
 
     _task_name = "邮件回复超时巡检"
-    _interval_setting = "EMAIL_REPLY_SWEEP_INTERVAL_MINUTES"
 
     @classmethod
     async def _run_once(cls) -> None:

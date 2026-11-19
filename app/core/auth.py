@@ -73,6 +73,7 @@ async def create_tokens(user_email: str, r: Redis) -> dict:
         "jti": uuid.uuid4().hex,
         "type": "access",
         "exp": access_exp,
+        "iat": now.timestamp(),
     }, ACCESS_SECRET)
 
     refresh_token = _encode({
@@ -80,6 +81,13 @@ async def create_tokens(user_email: str, r: Redis) -> dict:
         "jti": refresh_jti,
         "type": "refresh",
         "exp": refresh_exp,
+        # iat 是「吊销此前所有会话」的判据：改密时写入 pwd_reset_at，
+        # 签发时间早于它的一律失效。
+        # 这里刻意用带小数的 timestamp 而不是 pyjwt 默认的整秒 iat：
+        # 整秒精度下「同一秒内先改密、后登录」的新 token 会等于 reset_at，
+        # 比较严格小于虽然能放行，但「同一秒内先发 token、后改密」的旧 token
+        # 也会等于 reset_at 而被放过——两边不可能同时正确，用浮点即可都正确。
+        "iat": now.timestamp(),
     }, REFRESH_SECRET)
 
     await r.setex(
@@ -95,6 +103,36 @@ async def create_tokens(user_email: str, r: Redis) -> dict:
     }
 
 
+async def revoke_user_sessions(user_email: str, r: Redis) -> None:
+    """让该用户**已签发**的所有 refresh token 立即失效。
+
+    改密 / 强制下线时调用。实现方式是记一个「会话纪元」：
+    之后签发的 token 带 ``iat``，早于该时间点的一律拒绝兑换。
+
+    为什么不用「枚举该用户的 jti 再逐个删」：那需要额外的用户→jti 索引与
+    多键删除，在「用户密码刚泄露、需要立刻止血」的场景下又多一层状态；
+    时间戳判据只有一个键，且天然覆盖历史 token。
+    """
+    await r.set(
+        f"pwd_reset_at:{user_email}",
+        datetime.now(timezone.utc).timestamp(),
+        ex=int(REFRESH_EXPIRE_DAYS * 86400),
+    )
+
+
+async def _reject_if_session_revoked(user_email: str, payload: dict, r: Redis) -> None:
+    """签发时间早于最近一次改密时间 → 视为已吊销。"""
+    reset_at = await r.get(f"pwd_reset_at:{user_email}")
+    if reset_at is None:
+        return
+    issued_at = payload.get("iat")
+    if issued_at is None:
+        # 老 token 没有 iat：保守拒绝，反正过期后会重新登录
+        raise ValueError("Refresh token has been revoked")
+    if float(issued_at) < float(reset_at):
+        raise ValueError("Refresh token has been revoked")
+
+
 async def refresh_access_token(refresh_token: str, r: Redis) -> dict:
     try:
         payload = _decode(refresh_token, REFRESH_SECRET)
@@ -108,6 +146,8 @@ async def refresh_access_token(refresh_token: str, r: Redis) -> dict:
 
     jti = payload["jti"]
     user_id = payload["sub"]
+
+    await _reject_if_session_revoked(user_id, payload, r)
 
     # 原子消费：只有抢到该 jti 的那一次请求能继续签发新令牌
     if await _consume_refresh_token(r, jti) is None:

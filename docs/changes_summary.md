@@ -18,7 +18,7 @@
 | 质量 | 魔法字符串常量化、日志惰性格式化、死代码清理、命名重构 | 多处 |
 | 质量 | 导入副作用收敛、import 顺序统一 | 多处 |
 | 性能 | 复用 `httpx.AsyncClient` | `app/core/http_client.py` |
-| 测试 | pytest + pytest-asyncio，46 个用例 | `tests/` |
+| 测试 | pytest + pytest-asyncio，251 个用例 | `tests/` |
 | 工程 | 依赖清理、仓库卫生、部署文档重写 | `pyproject.toml`、`docs/deployment.md` |
 
 ---
@@ -273,7 +273,7 @@ addopts = "-q -p no:cacheprovider"
 - `tests/conftest.py` 提供 `FakeRedis`（内存版）、`state_factory`（最小 state）、
   `work_dir`（工作区内临时目录，避开系统 Temp 的权限限制）
 
-### 5.2 覆盖范围（46 个用例）
+### 5.2 覆盖范围（251 个用例）
 
 | 文件 | 覆盖 | 用例数 |
 |---|---|---|
@@ -289,7 +289,7 @@ addopts = "-q -p no:cacheprovider"
 ### 5.3 运行
 
 ```bash
-uv run pytest          # 46 passed in ~4s
+uv run pytest          # 251 passed in ~8s
 ```
 
 ---

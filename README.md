@@ -9,20 +9,23 @@
 | 特性 | 说明 |
 |------|------|
 | **LangGraph 状态机工作流** | 招聘流程建模为 `StateGraph`，而非 LLM 黑盒决策；每个阶段是显式节点，流程可见、可调试、可扩展 |
-| **人机协作（interrupt / resume）** | `interrupt()` 暂停状态图等待候选人邮件回复，外部调度器拿到回复后 resume 继续执行 |
+| **人机协作（interrupt / resume）** | `interrupt()` 暂停状态图等待候选人邮件回复，邮件机器人收到回复后 `Command(resume=...)` 继续执行 |
 | **检查点持久化** | `AsyncPostgresSaver` 将状态图检查点写入 PostgreSQL，服务重启后可从断点恢复 |
 | **分层异常处理** | 自定义异常层级 + `@node_error_wrapper` 装饰器：业务异常流转到 `error` 节点，基础设施异常穿透到外层统一标记 `PROCESSING_ERROR` |
 | **人工通过/重试** | HR/管理员可将 `AI筛选失败`/`协商超时`/`处理异常` 的候选人手动触发重试，通过 `Command(goto="email_invite")` 重启协商流程 |
-| **节点元信息保留** | `@wraps` 确保装饰后的节点名、文档字符串不丢失，日志中仍能正确显示 `scoring_node` 而非 `wrapped` |
-| **防御性错误终结点** | `error_node` 自身也做 try/catch，即使状态更新失败也保证记录 `critical` 日志，不会二次抛异常 |
-| **可配置阈值** | 评分通过阈值、协商轮次上限、面试时间窗口全部通过 `.env` 配置 |
+| **超时自动巡检** | 定时扫描「等待候选人回复」超时的流程，自动推进到「协商超时」，无需人工介入 |
+| **邮件意图识别** | LLM 识别邮件意图（简历投递 / 面试回复），投递类邮件进入待确认台，避免自动建错人 |
+| **邮件投递确认台** | HR 在确认台选择职位后，才创建候选人并启动招聘流程 |
 | **AI 多维度评分** | 工作经验 / 技术技能 / 软技能 / 教育背景 / 项目经验五维打分，结构化 JSON 输出并落库 |
 | **双模型容错** | 主模型（DeepSeek）+ 备用模型（Qwen），`ModelFallbackMiddleware` 自动降级 |
 | **简历解析流水线** | PaddleOCR 识别 + LLM 结构化提取，后台任务 + Redis 状态轮询 |
 | **钉钉深度集成** | OAuth2 扫码授权、日历读取空闲时段、自动创建面试日程 |
-| **邮件机器人** | 自研异步 IMAP/SMTP 邮件机器人，长连接 + 断线自愈 + 关键词规则监听；收到候选人回复后通过 `Command(resume=...)` 恢复状态图 |
+| **邮件机器人** | 自研异步 IMAP/SMTP 邮件机器人，长连接 + 断线自愈 + 关键词规则监听 |
 | **JWT 双令牌认证** | Access + Refresh Token，Redis 黑名单吊销，pwdlib Argon2 密码哈希 |
-| **非阻塞结构化日志** | 队列异步落盘，不阻塞业务线程 / 事件循环；节点日志独立归档；多进程安全（独立监听进程统一写盘） |
+| **登录限流** | 基于 Redis 滑动窗口 + Lua 原子脚本的 IP / 账号双维度限流 |
+| **安全审计日志** | 登录、简历下载、删除等敏感操作写入独立 `audit.log`（JSON Lines） |
+| **非阻塞结构化日志** | 队列异步落盘，不阻塞业务线程 / 事件循环；节点日志独立归档 |
+| **全链路 Request ID** | 每个请求分配 `X-Request-ID`，贯穿日志与审计，便于追踪 |
 
 ---
 
@@ -33,16 +36,18 @@
 | Web 框架 | FastAPI（异步 OpenAPI 文档自动生成） |
 | ORM / 数据库 | SQLAlchemy 2.x AsyncSession + PostgreSQL（连接池 + 预检） |
 | 迁移 | Alembic |
-| 缓存 | Redis（asyncio 连接池，Token / 任务状态 / 邀请码） |
+| 缓存 | Redis（asyncio 连接池，Token / 任务状态 / 邀请码 / 限流） |
 | AI 框架 | LangGraph（状态图）+ LangChain（Agent / Tool Calling） |
 | LLM 接入 | OpenAI 兼容协议（DeepSeek / Qwen） |
+| HTTP 客户端 | httpx（全局复用 `AsyncClient`，连接池 + 超时） |
 | 配置管理 | Pydantic Settings v2（`.env` → 环境变量 → 默认值） |
 | 认证 | PyJWT + OAuth2PasswordBearer + pwdlib[argon2] |
 | OCR / 文档 | PaddleOCR、PyMuPDF、pywin32（Word→PDF） |
-| 邮件 | aiosmtplib、imaplib、APScheduler（轮询调度） |
+| 邮件 | aiosmtplib、imaplib、自研计时循环（`MAIL_POLL_INTERVAL_SECONDS`） |
 | 钉钉 | alibabacloud-dingtalk SDK + httpx |
 | 日志 | 标准库 logging（QueueHandler 非阻塞 + 文件轮转 + 分级） |
-| 进程管理 | uvicorn（单进程）/ gunicorn（多进程，生产推荐） |
+| 测试 | pytest + pytest-asyncio |
+| 部署 | uvicorn / gunicorn |
 
 ---
 
@@ -55,15 +60,17 @@ flowchart TD
     end
 
     subgraph API["FastAPI 路由层"]
-        R1[用户 / 认证]
+        R1[用户 / 认证 / 限流]
         R2[职位管理]
         R3[候选人管理]
+        R4[邮件投递确认台]
     end
 
     subgraph Service["Service 业务层"]
         S1[简历上传 / Word转PDF]
         S2[邀请码 / 邮件]
         S3[钉钉授权]
+        S4[投递确认 / 拒绝]
     end
 
     subgraph Workflow["LangGraph 状态机"]
@@ -109,6 +116,9 @@ flowchart TD
     A --> API
     API --> Service
     Service --> Workflow
+    API --> R4
+    R4 --> S4
+    S4 -->|确认后建人起图| W1
     Workflow --> DB
     Workflow --> RD
     Workflow --> DT
@@ -123,44 +133,81 @@ flowchart TD
 ```
 simplejob/
 ├── app/
-│   ├── main.py                  # FastAPI 应用入口（生命周期、CORS、全局异常处理器）
+│   ├── main.py                  # FastAPI 应用入口
+│   ├── core/                    # 基础设施
+│   │   ├── config.py            # Pydantic Settings（含招聘阈值 / 限流 / 超时）
+│   │   ├── db.py                # 异步引擎 / 会话工厂 / BaseModel
+│   │   ├── time.py              # 全项目唯一时间出入口（北京时间 / naive 落库 / ISO-8601）
+│   │   ├── auth.py              # JWT 签发、校验、权限依赖（HR / 超管）
+│   │   ├── exceptions.py        # 自定义异常层级
+│   │   ├── exception_handlers.py# 全局异常处理器
+│   │   ├── redis_client.py      # Redis 连接池
+│   │   ├── checkpointer.py      # LangGraph 检查点（进程级单例）
+│   │   ├── http_client.py       # 全局 httpx AsyncClient
+│   │   ├── logging_config.py    # 日志配置（非阻塞队列 + 轮转 + 分级）
+│   │   ├── audit.py             # 安全审计日志
+│   │   ├── rate_limit.py        # Redis 滑动窗口限流
+│   │   ├── request_context.py   # 请求上下文（request_id）
+│   │   ├── lifespan.py          # 应用生命周期管理
+│   │   ├── limiters.py          # 限流键与规则
+│   │   └── mail.py              # FastMail 事务邮件
+│   ├── middleware/              # 中间件
+│   │   ├── cors_middleware.py
+│   │   └── request_id_middleware.py
 │   ├── agents/                  # LangChain Agent 与提示词
 │   │   ├── candidate.py         # 候选人流程 Agent（旧模式，保留兼容）
 │   │   ├── resume.py            # 简历信息提取 Agent
 │   │   ├── prompts.py           # 全部系统提示词
 │   │   └── llms.py              # 模型实例
-│   ├── core/                    # 基础设施
-│   │   ├── config.py            # Pydantic Settings（含招聘阈值）
-│   │   ├── db.py                # 异步引擎 / 会话工厂 / BaseModel
-│   │   ├── auth.py              # JWT 签发、校验、当前用户依赖
-│   │   ├── exceptions.py        # 自定义异常层级
-│   │   ├── redis_client.py      # Redis 连接池
-│   │   ├── checkpointer.py      # LangGraph 检查点
-│   │   ├── logging_config.py    # 日志配置（非阻塞队列 + 轮转 + 分级）
-│   │   └── mail.py              # FastMail 事务邮件
 │   ├── models/                  # SQLAlchemy ORM 模型
+│   │   ├── candidate.py         # 候选人 / 简历 / AI 评分
+│   │   ├── mail_submission.py   # 邮件投递待确认记录
+│   │   ├── position.py          # 职位
+│   │   ├── InterviewModel.py    # 面试记录
+│   │   └── user.py              # 用户 / 部门 / 钉钉绑定
 │   ├── schemas/                 # Pydantic 请求/响应模型
+│   │   ├── intent_schema.py     # 意图/槽位（邮件与图内共用）
+│   │   └── ...
 │   ├── repository/              # 数据访问层
 │   ├── service/                 # 业务逻辑层
+│   │   ├── candidate_status_ser.py # 状态流转校验 + 人工重试触发
+│   │   ├── mail_submission_ser.py  # 投递确认 / 拒绝
+│   │   └── ...
 │   ├── routers/                 # 路由层
-│   ├── tasks/                   # 后台任务（OCR / 邮件 / Agent）
+│   │   ├── mail_submission_router.py # 邮件投递确认台接口
+│   │   └── ...
+│   ├── tasks/                   # 后台任务
+│   │   ├── agent_tasks.py       # 招聘流程执行
+│   │   ├── ocr_tasks.py         # OCR + LLM 简历解析
+│   │   ├── email_tasks.py       # 事务邮件
+│   │   ├── timeout_tasks.py     # 邮件回复超时巡检
+│   │   ├── mail_submission_tasks.py # 投递超期巡检
+│   │   └── periodic_task.py     # 周期任务基类（含分布式锁）
 │   └── workflow/                # LangGraph 状态机
 │       ├── candidate_graph.py   # 图构建（节点 + 边 + 条件路由）
 │       ├── candidate_state.py   # 状态定义（TypedDict）
 │       ├── error_handler.py     # @node_error_wrapper + error_node
 │       └── candidate_nodes/     # 各阶段节点实现
 ├── utils/
-│   ├── emailbot/                # 自研异步邮件机器人（IMAP/SMTP/解析/规则）
-│   ├── available_time.py        # 空闲时段计算算法
-│   ├── ORC_ser.py               # PaddleOCR 封装
+│   ├── emailbot/                # 自研异步邮件机器人（IMAP/SMTP/解析/意图/规则）
+│   ├── ocr_service.py           # PaddleOCR 云端 API 封装
 │   ├── PDFser.py                # Word → PDF 转换
-│   └── time_ISO8601_datatime.py # 北京时间工具
+│   └── available_time.py        # 空闲时段计算算法
+├── tests/                       # pytest 测试套件（251 个用例）
+├── scripts/                     # 运维脚本
+│   ├── backup.sh                # 数据库备份
+│   ├── deploy.sh                # 部署脚本
+│   ├── demo_seed.py             # 演示数据
+│   ├── bench_index_compare.py   # 索引性能对比
+│   └── ci/smoke.py              # CI 冒烟测试
+├── benches/                     # 性能基准数据
 ├── alembic/                     # 数据库迁移脚本
 ├── docs/                        # 设计与重构文档
+├── hr-frontend/                 # Vue 3 + Element Plus 前端
 ├── upload/                      # 简历文件存储
 ├── attachments/                 # 邮件附件存储
 ├── .env                         # 本地配置（已在 .gitignore 中）
-├── gunicorn.conf.py             # 多进程部署配置（主进程接管日志）
+├── gunicorn.conf.py             # gunicorn 部署配置
 ├── pyproject.toml
 └── README.md
 ```
@@ -212,6 +259,7 @@ MAIL_PASSWORD=your_auth_code
 DINGTALK_CLIENT_ID=your_client_id
 DINGTALK_CLIENT_SECRET=your_client_secret
 BACKEND_BASE_URL=https://your-public-domain
+FRONTEND_BASE_URL=https://your-domain
 
 # LLM / OCR
 DASHSCOPE_API_KEY=your_api_key
@@ -225,10 +273,11 @@ AM_WINDOW_END_HOUR=12
 PM_WINDOW_START_HOUR=14
 PM_WINDOW_END_HOUR=18
 
-# 等待候选人回复邮件的超时时间（小时），超时后自动流转到「协商超时」
+# 邮件回复超时（小时）
 EMAIL_REPLY_TIMEOUT_HOURS=48
-# 超时巡检间隔（分钟）
-EMAIL_REPLY_SWEEP_INTERVAL_MINUTES=15
+
+# 邮件轮询间隔（秒）——独立开关，不跟随 DEBUG
+MAIL_POLL_INTERVAL_SECONDS=15
 
 # 登录限流（次/60 秒）
 LOGIN_RATE_LIMIT_PER_IP=20
@@ -266,21 +315,17 @@ uv run uvicorn app.main:app --reload
 ### 6. 运行测试
 
 ```bash
-uv run pytest          # 46 个用例，约 4 秒
+uv run pytest          # 251 个用例，约 8 秒
 ```
 
-测试不依赖数据库 / Redis / 网络：用内存版 Redis 与纯函数覆盖路由、异常包装、
-Token 生命周期与日志分流。
+测试不依赖真实数据库 / Redis / 网络：用内存版 Redis 与纯函数覆盖路由、
+异常包装、Token 生命周期、意图识别与日志分流。
 
-> **生产多进程部署**（可选）：用 gunicorn，日志由主进程统一接管：
+> **生产部署**（可选）：用 gunicorn，日志由主进程统一接管：
 >
 > ```bash
 > uv run gunicorn app.main:app -c gunicorn.conf.py
 > ```
->
-> ⚠️ 不要用 `uvicorn --workers N` —— uvicorn 以 spawn 启动 worker，
-> 拿不到共享日志队列，会退化成每个 worker 各写各的日志文件。
-> 详见 [`docs/deployment.md`](docs/deployment.md)。
 
 ---
 
@@ -297,7 +342,7 @@ Token 生命周期与日志分流。
 | `check_availability` | LLM + 外部服务 | 解析候选人回复的时间意图，对照钉钉日历校验空闲 |
 | `confirm` | 外部服务 + DB | 发确认邮件 + 创建钉钉日程 + 创建面试记录 + 更新候选人状态 |
 | `rejected` / `refused` | DB | 淘汰 / 候选人拒绝，更新状态 |
-| `negotiation_expired` | DB | 超过协商轮次上限，更新状态 |
+| `negotiation_expired` | DB | 超过协商轮次上限或回复超时，更新状态 |
 | `error` | 错误终结点 | 记录错误日志，更新候选人状态为 `PROCESSING_ERROR` |
 | **人工通过/重试** | HR 干预 | HR 在失败后手动触发，通过 `Command(goto="email_invite")` 重启协商流程 |
 
@@ -321,22 +366,33 @@ Token 生命周期与日志分流。
 - 失败后补救：`AI筛选失败` / `协商超时` / `处理异常` → `人工通过/重试` → `待面试`
 - 人工通过/重试由 HR/管理员触发，重启 `email_invite` 节点
 
-### 面试时间协商
+### 邮件投递确认台
+
+邮件机器人识别到「简历投递」意图后，**不自动建人**，而是落库到待确认台：
 
 ```
-AI 评分通过 → 发邀请邮件（附建议时间）
-                    ↓
-            候选人回复邮件
-          ┌─────────┼─────────┐
-       确认原时间  提议新时间   拒绝
-          ↓         ↓          ↓
-       确认面试   校验面试官空闲  → 结束
-                  ┌────┴────┐
-                可用       冲突
-                 ↓          ↓
-              确认面试   通知重选（轮次+1）
-                           ↓
-                     超轮次上限 → 协商超时
+邮件命中「简历投递」
+        ↓
+LLM 提取候选人信息 + 推荐职位
+        ↓
+写入 mail_resume_submissions（PENDING）
+        ↓
+HR 在确认台选择职位 → 确认
+        ↓
+创建候选人 + 启动招聘流程
+```
+
+### 超时自动巡检
+
+```
+定时任务（默认每 15 分钟）
+        ↓
+扫描 email_invite_sent_at 超过 48 小时
+且状态仍为 AI筛选成功 / 人工通过/重试 的候选人
+        ↓
+Command(resume=EMAIL_REPLY_TIMEOUT) 恢复状态图
+        ↓
+negotiation_expired_node → 状态推进到「协商超时」
 ```
 
 ---
@@ -386,7 +442,10 @@ AI 评分通过 → 发邀请邮件（附建议时间）
 | 上午面试窗口 | `AM_WINDOW_START_HOUR` / `AM_WINDOW_END_HOUR` | 9 / 12 | 用于校验「上午」类模糊时间 |
 | 下午面试窗口 | `PM_WINDOW_START_HOUR` / `PM_WINDOW_END_HOUR` | 14 / 18 | 用于校验「下午」类模糊时间 |
 | 邮件回复超时 | `EMAIL_REPLY_TIMEOUT_HOURS` | 48 | 等待候选人回复超过该时长 → 自动流转「协商超时」 |
-| 超时巡检间隔 | `EMAIL_REPLY_SWEEP_INTERVAL_MINUTES` | 15 | 后台巡检任务的执行周期 |
+| 后台巡检调度模式 | 由 `DEBUG` 推导 | — | `DEBUG=True` → 每 15 秒一轮；`False` → 按 `PERIODIC_TASK_DAILY_TIMES` 的每日时刻 |
+| 每日执行时刻 | `PERIODIC_TASK_DAILY_TIMES` | `08:00,12:00,17:00,24:00` | 非 debug 环境生效 |
+| debug 巡检间隔 | `PERIODIC_TASK_DEV_INTERVAL_SECONDS` | 15 | 秒；仅 `DEBUG=True` 时生效 |
+| 邮件轮询间隔 | `MAIL_POLL_INTERVAL_SECONDS` | 15 | 秒；独立开关，不跟随 `DEBUG` |
 | 登录限流（IP / 账号） | `LOGIN_RATE_LIMIT_PER_IP` / `LOGIN_RATE_LIMIT_PER_EMAIL` | 20 / 5 | 60 秒滑动窗口内的尝试上限 |
 | 工作流开关 | `GRAPH_OPEN` | False | `True` 启用 LangGraph 状态图 |
 | 节点日志 logger 名 | `NODE_LOGGER_NAME` | `workflow.nodes` | 决定哪些记录写入 `logs/nodes.log` |
@@ -405,12 +464,9 @@ logger.info(...) → QueueHandler → 队列 → 监听进程/线程 → 文件
 ```
 
 - **非阻塞**：调用方只做 `queue.put_nowait`，磁盘 IO 不阻塞业务线程与 asyncio 事件循环
-- **多进程安全**：gunicorn 部署时由主进程创建 `multiprocessing.Queue` 并启动**独立的日志监听进程**，全局唯一写盘者，worker 不会互相覆盖
 - **分级归档**：`workflow.log`（全量，按天）/ `error.log`（错误，按大小）/ `nodes.log`（节点执行，按天）/ `audit.log`（安全审计，JSON Lines）
-- **可追溯**：每个请求分配 `X-Request-ID`，日志里带 `req=<id>`；登录、登出、简历下载等安全操作写入 `audit.log`
+- **可追溯**：每个请求分配 `X-Request-ID`，日志里带 `req=<id>`；登录、登出、简历下载、删除等安全操作写入 `audit.log`
 - **可配置**：节点 logger 名由 `NODE_LOGGER_NAME` 控制，logger 与分流过滤器同源，改名后路由自动跟随
-
-单进程（`uvicorn --workers 1`）下退化为进程内监听线程，同样只有一个写入者。
 
 详见 [`docs/logging_system.md`](docs/logging_system.md)。
 
@@ -418,31 +474,93 @@ logger.info(...) → QueueHandler → 队列 → 监听进程/线程 → 文件
 
 ## 🔌 API 概览
 
+### 用户 / 认证
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/user/token` | 登录（邮箱 + 密码） |
+| POST | `/user/token` | 登录（邮箱 + 密码，带限流） |
 | POST | `/user/refresh` | 刷新 Access Token |
 | POST | `/user/logout` | 登出（吊销 Refresh Token） |
+| POST | `/user/password` | 修改密码 |
 | GET | `/user/me` | 当前登录用户 |
 | POST | `/user/invite` | 邀请用户（发送邀请码邮件） |
 | POST | `/user/register` | 注册（需邀请码） |
 | GET | `/user/list` | 员工列表（分页） |
 | PATCH | `/user/status/update` | 修改员工状态 |
 | GET | `/user/department/list` | 部门列表 |
+| POST | `/user/assign/department` | 给 HR 分配部门 |
+| GET | `/user/hr/list` | HR 列表 |
 | GET | `/user/dingtalk/authorize` | 获取钉钉授权 URL |
 | GET | `/user/dingtalk/callback` | 钉钉 OAuth 回调 |
 | GET | `/user/dingtalk/account` | 获取已绑定的钉钉账号 |
+
+### 职位管理
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
 | POST | `/position/create` | 创建职位 |
 | GET | `/position/list` | 职位列表 |
+| PATCH | `/position/{id}` | 更新职位 |
 | DELETE | `/position/delete/{id}` | 删除职位 |
+
+### 候选人管理
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
 | POST | `/candidate/resume/upload` | 上传简历（PDF/Word/图片） |
 | POST | `/candidate/resume/parse` | 触发简历解析（后台任务） |
 | GET | `/candidate/resume/parse/{task_id}` | 查询解析任务状态 |
 | POST | `/candidate/create` | 创建候选人（触发招聘流程） |
 | GET | `/candidate/list` | 候选人列表（按职位/状态筛选） |
-| PATCH | `/candidate/{id}/status` | 更新候选人状态（单向流转校验） |
+| PATCH | `/candidate/{id}/status` | 更新候选人状态（含人工通过/重试） |
+| DELETE | `/candidate/{id}` | 删除候选人（含关联数据） |
 | GET | `/candidate/ai-score/{id}` | 获取 AI 评分详情 |
 | GET | `/candidate/candidate/7d` | 近 7 天新增候选人统计 |
+| GET | `/candidate/{id}/resume` | 下载简历（鉴权） |
+| POST | `/candidate/{id}/manual-decision` | 人工决定是否发送面试邀请（唤醒暂停的招聘图） |
+
+### 邮件投递确认台
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/mail-submissions` | 投递列表（按状态筛选） |
+| GET | `/mail-submissions/{id}` | 投递详情 |
+| POST | `/mail-submissions/{id}/confirm` | 确认投递（建人并起图） |
+| POST | `/mail-submissions/{id}/reject` | 拒绝投递 |
+
+### 日程
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/calendar/events?days=7` | 我的日程（未来 N 天，需绑定钉钉；未绑定返回 400） |
+
+---
+
+## 🧪 测试
+
+```
+tests/
+├── conftest.py                # 夹具：内存 Redis（含 Lua 语义）/ 临时工作目录
+├── test_auth_tokens.py        # Token 生命周期（10）
+├── test_bugfixes_1117.py      # 11-17 缺陷修复回归（50）
+├── test_candidate_ownership.py# 候选人接口归属校验（6）
+├── test_change_password.py    # 修改密码（22）
+├── test_confirm_branch.py     # 「同意原时间」分支（5）
+├── test_email_invite_guard.py # 邀请节点错误守卫（6）
+├── test_email_reply_interrupt.py # 中断点（3）
+├── test_exception_wrapper.py  # 节点异常包装（5）
+├── test_graph_routes.py       # 状态图路由（24）
+├── test_hardening.py          # 安全加固（6）
+├── test_intent.py             # 意图识别（9）
+├── test_llms_lazy.py          # LLM 客户端懒加载（3）
+├── test_logging_routing.py    # 日志分流（9）
+├── test_negotiation_loop.py   # 协商主链路（8）
+├── test_rate_limit.py         # 滑动窗口限流（7）
+├── test_scheduler.py          # 后台调度与重试（32）
+└── test_time_policy.py        # 时区策略（16）
+```
+
+**共 251 个用例**，运行约 8 秒，不依赖真实数据库 / Redis / 网络。
 
 ---
 
@@ -454,6 +572,7 @@ logger.info(...) → QueueHandler → 队列 → 监听进程/线程 → 文件
 - SMTP 发件（STARTTLS / 隐式 SSL）
 - 长连接保活 + 断线自愈 + `asyncio.Lock` 串行化
 - UID 游标持久化 + Message-ID 去重（幂等）
+- **意图识别**：LLM 区分「简历投递」与「面试回复」
 - 关键词/附件规则 → 自动回复或提醒
 
 详见 [`utils/emailbot/README.md`](utils/emailbot/README.md)。
@@ -464,13 +583,16 @@ logger.info(...) → QueueHandler → 队列 → 监听进程/线程 → 文件
 
 | 文档 | 内容 |
 |------|------|
-| [`docs/error_handling_design.md`](docs/error_handling_design.md) | 分层异常架构、节点安全网、BackgroundTask 安全、PROCESSING_ERROR、@wraps、结构化日志、error_node 防御性 7 大亮点详解 |
-| [`docs/logging_system.md`](docs/logging_system.md) | 日志系统：非阻塞队列、独立监听进程、多进程安全、分流与轮转 |
-| [`docs/changes_summary.md`](docs/changes_summary.md) | 本轮改造总览：日志演进、安全加固、质量修复、测试与已知限制 |
-| [`docs/ops_plan.md`](docs/ops_plan.md) | 部署 / CI / 集成测试 / 监控 的落地方案（含制品、流水线、告警规则、排期） |
+| [`docs/error_handling_design.md`](docs/error_handling_design.md) | 分层异常架构、节点安全网、BackgroundTask 安全、PROCESSING_ERROR、@wraps、结构化日志、error_node 防御性 |
+| [`docs/logging_system.md`](docs/logging_system.md) | 日志系统：非阻塞队列、独立监听、分流与轮转 |
+| [`docs/deployment.md`](docs/deployment.md) | 生产部署方案（裸机 / Docker）：Nginx/Caddy、systemd、Compose、备份升级、故障排查 |
+| [`docs/technical_highlights.md`](docs/technical_highlights.md) | 技术亮点汇总 |
+| [`docs/sql_performance_optimization.md`](docs/sql_performance_optimization.md) | SQL 性能优化与索引设计 |
+| [`docs/rate_limiting_plan.md`](docs/rate_limiting_plan.md) | 限流方案设计 |
+| [`docs/monitoring-alerting-healthcheck.md`](docs/monitoring-alerting-healthcheck.md) | 监控、告警与健康检查 |
+| [`docs/intent_recognition_implementation.md`](docs/intent_recognition_implementation.md) | 邮件意图识别实现 |
+| [`docs/periodic_task_refactor.md`](docs/periodic_task_refactor.md) | 周期任务重构（含分布式锁） |
 | [`docs/workflow_email_integration.md`](docs/workflow_email_integration.md) | 邮件机器人与招聘工作流的集成说明 |
-| [`docs/workflow_fixes.md`](docs/workflow_fixes.md) | 工作流历史问题修复记录 |
-| [`docs/deployment.md`](docs/deployment.md) | 生产部署方案（裸机 / Docker 双版）：环境准备、Nginx/Caddy 配置、systemd、Compose 编排、备份升级、故障排查、gunicorn 多进程 |
 
 ---
 
@@ -481,8 +603,3 @@ logger.info(...) → QueueHandler → 队列 → 监听进程/线程 → 文件
 - `app/main.py` / `app/core/db.py` 中设置 `WindowsSelectorEventLoopPolicy`，解决 psycopg 在 ProactorEventLoop 下的兼容问题
 - 强制 uvicorn 使用 `SelectorEventLoop`
 - Word → PDF 转换使用 `pywin32`（仅 Windows 可用）
-- gunicorn 依赖 `os.fork`，**Windows 上不可用** —— 只能单进程运行 `uvicorn --workers 1`
-
----
-
-

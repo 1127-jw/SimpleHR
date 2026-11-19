@@ -25,7 +25,7 @@ from app.schemas.candidate_schema import CandidateSchema
 from app.schemas.position_schema import PositionSchema
 from app.schemas.user_schema import UserSH
 from utils.emailbot.models import ParsedEmail
-from utils.time_ISO8601_datatime import now_beijing, to_naive_beijing
+from app.core.time import db_now
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -107,7 +107,7 @@ async def confirm_mail_submission(
             submission_id, MailSubmissionStatusEnum.CONFIRMED,
             position_id=position_id, resume_id=resume.id,
             reviewer_id=current_user.id,
-            reviewed_at=to_naive_beijing(now_beijing()),
+            reviewed_at=db_now(),
         )
 
     # 会话内转 Schema（create_candidate 已带 eager 关联）
@@ -125,7 +125,7 @@ async def reject_mail_submission(
         await repo.mark_status(
             submission_id, MailSubmissionStatusEnum.REJECTED,
             reviewer_id=current_user.id,
-            reviewed_at=to_naive_beijing(now_beijing()),
+            reviewed_at=db_now(),
             review_note=note,
         )
 
@@ -135,27 +135,31 @@ async def enrich_mail_submission(submission_id: str, attachment_path: str) -> No
 
     失败只记日志，不阻塞邮件轮询；解析结果供 HR 在确认台核对。
     """
+    from app.core.limiters import task_slot
+
     try:
         from app.agents.resume import extract_candidate_info
         from utils.ocr_service import PaddleOcr
 
-        ocr_path = attachment_path
-        suffix = Path(attachment_path).suffix.lower()
-        if suffix in (".doc", ".docx"):
-            # OCR 只吃 PDF，先转换一份临时 PDF
-            from utils.PDFser import WordToPdfConverter
+        # 后台富化：独立小配额，避免抢占主流程的 LLM 并发
+        async with task_slot("mail_enrich", settings.MAIL_ENRICH_MAX_CONCURRENCY):
+            ocr_path = attachment_path
+            suffix = Path(attachment_path).suffix.lower()
+            if suffix in (".doc", ".docx"):
+                # OCR 只吃 PDF，先转换一份临时 PDF
+                from utils.PDFser import WordToPdfConverter
 
-            pdf_path = Path(attachment_path).with_suffix(".pdf")
-            await WordToPdfConverter(
-                word_path=attachment_path, output_pdf_path=str(pdf_path)
-            ).convert()
-            ocr_path = str(pdf_path)
+                pdf_path = Path(attachment_path).with_suffix(".pdf")
+                await WordToPdfConverter(
+                    word_path=attachment_path, output_pdf_path=str(pdf_path)
+                ).convert()
+                ocr_path = str(pdf_path)
 
-        paddle = PaddleOcr()
-        job_id = await paddle.create_job(ocr_path)
-        jsonl_url = await paddle.poll_for_state(job_id)
-        contents = await paddle.fetch_parsed_contents(jsonl_url)
-        info = await extract_candidate_info("\n\n".join(contents))
+            paddle = PaddleOcr()
+            job_id = await paddle.create_job(ocr_path)
+            jsonl_url = await paddle.poll_for_state(job_id)
+            contents = await paddle.fetch_parsed_contents(jsonl_url)
+            info = await extract_candidate_info("\n\n".join(contents))
 
         async with AsyncSessionFactory() as session:
             async with session.begin():
@@ -172,7 +176,7 @@ async def enrich_mail_submission(submission_id: str, attachment_path: str) -> No
 
 async def expire_stale_submissions() -> int:
     """定时任务：超期 PENDING → EXPIRED，返回处理条数。"""
-    deadline = to_naive_beijing(now_beijing()) - timedelta(
+    deadline = db_now() - timedelta(
         days=settings.MAIL_SUBMISSION_EXPIRE_DAYS
     )
     async with AsyncSessionFactory() as session:

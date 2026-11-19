@@ -41,10 +41,19 @@ async def hit(
 ) -> bool:
     """记录一次请求。
 
+    ``limit <= 0`` 表示**关闭限流**（放行且不计数）。
+
+    这与 ``app/core/limiters.py`` 里 ``LLM_RPM_LIMIT <= 0`` 的语义保持一致。
+    此前本函数对 ``limit <= 0`` 的处理是「永远不满足 count < limit」，
+    即静默变成全站 429 —— 把「关掉限流」的配置变成了「关掉服务」。
+
     Returns:
         True 表示放行，False 表示已超限。
     """
     import time
+
+    if limit <= 0:
+        return True
 
     allowed = await r.eval(
         _SLIDING_WINDOW_LUA,

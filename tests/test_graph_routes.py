@@ -1,10 +1,12 @@
 """状态图路由的纯函数测试。
 
-覆盖 4 条路由：
+覆盖 6 条路由：
 1. screening 之后（通过 → scoring / 未通过 → rejected）
 2. scoring 之后（达阈值 → email_invite / 未达 → rejected）
-3. 收到候选人邮件之后（超时 → negotiation_expired / 否则 → check_availability）
-4. check_availability 之后（拒绝 / 确认 / 继续协商 / 超轮次）
+3. email_invite 之后（唯一出口是等待回复，但发信失败要去 error）
+4. 收到候选人邮件之后（超时 → negotiation_expired / 否则 → check_availability）
+5. check_availability 之后（拒绝 / 确认 / 继续协商 / 超轮次）
+6. 复核之后（时段仍空闲 → confirm / 被占用 → 回到等待回复）
 
 另外覆盖统一的 error 守卫 ``_with_error_check``。
 """
@@ -13,15 +15,18 @@ from types import SimpleNamespace
 import pytest
 
 from app.workflow.candidate_graph import (
+    _route_after_email_invite,
     _route_after_scoring,
     _route_after_screening,
     _with_error_check,
     route_after_check_availability,
     route_after_email_reply,
+    route_after_recheck_interview_slot,
 )
 from app.workflow.candidate_state import (
     EMAIL_REPLY_TIMEOUT,
     REPLY_REFUSED,
+    REPLY_SLOT_TAKEN,
     REPLY_TIME_AVAILABLE,
 )
 
@@ -47,10 +52,10 @@ def test_route_after_screening_missing_flag_is_rejected(state_factory):
 @pytest.mark.parametrize(
     ("score", "threshold", "expected"),
     [
-        (8, 7, "email_invite"),   # 高于阈值
-        (7, 7, "rejected"),       # 等于阈值不算通过（严格大于）
+        (8, 7, "manual_decision"),   # 高于阈值 → 人工闸门
+        (7, 7, "rejected"),          # 等于阈值不算通过（严格大于）
         (6, 7, "rejected"),
-        (9, None, "email_invite"),  # 用默认阈值
+        (9, None, "manual_decision"),  # 用默认阈值
     ],
 )
 def test_route_after_scoring(state_factory, score, threshold, expected):
@@ -74,7 +79,13 @@ def test_route_after_scoring_uses_configured_threshold(state_factory):
     assert _route_after_scoring(state) == "rejected"
 
 
-# ---------------- 3. 收到邮件之后 ----------------
+# ---------------- 3. email_invite 之后 ----------------
+
+def test_route_after_email_invite_waits_for_reply(state_factory):
+    assert _route_after_email_invite(state_factory()) == "get_candidate_email_reply_node"
+
+
+# ---------------- 4. 收到邮件之后 ----------------
 
 def test_route_after_email_reply_timeout(state_factory):
     state = state_factory(candidate_email_reply=EMAIL_REPLY_TIMEOUT)
@@ -122,6 +133,19 @@ def test_route_check_availability_default_round_limit(state_factory):
     assert route_after_check_availability(state) == "negotiation_expired"
 
 
+# ---------------- 6. 复核之后 ----------------
+
+def test_route_recheck_free_goes_to_confirm(state_factory):
+    state = state_factory(candidate_email_reply=REPLY_TIME_AVAILABLE)
+    assert route_after_recheck_interview_slot(state) == "confirm"
+
+
+def test_route_recheck_taken_goes_back_to_waiting(state_factory):
+    """时段被占用 → 回等待回复（节点已归零轮次并重发邮件）。"""
+    state = state_factory(candidate_email_reply=REPLY_SLOT_TAKEN, negotiation_round=0)
+    assert route_after_recheck_interview_slot(state) == "get_candidate_email_reply_node"
+
+
 # ---------------- 统一的 error 守卫 ----------------
 
 def test_error_guard_short_circuits(state_factory):
@@ -141,11 +165,13 @@ def test_error_guard_delegates_when_no_error(state_factory):
     [
         _route_after_screening,
         _route_after_scoring,
+        _route_after_email_invite,
         route_after_email_reply,
         route_after_check_availability,
+        route_after_recheck_interview_slot,
     ],
 )
 def test_all_routes_respect_error_guard(state_factory, router):
-    """4 条路由都被同一个守卫包住：标记错误后一律去 error 节点。"""
+    """6 条路由都被同一个守卫包住：标记错误后一律去 error 节点。"""
     guarded = _with_error_check(router)
     assert guarded(state_factory(error_occurred=True)) == "error"

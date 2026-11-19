@@ -484,8 +484,9 @@ class PDF2ImageConverter:
                 return buffer
             else:
                 return original_buffer
-        except:
-            # 如果压缩失败，返回原始缓冲区
+        except Exception:
+            # 压缩是可选优化：任何失败都退回原始缓冲区。
+            # 这里不能写裸 except —— 它会把 KeyboardInterrupt / SystemExit 一起吞掉。
             return original_buffer
 
     def get_compression_report(self, original_size, compressed_buffer):

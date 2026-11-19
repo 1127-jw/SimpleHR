@@ -3,15 +3,18 @@ from datetime import datetime
 
 from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
-from app.core.exceptions import DingTalkServiceError, EmailSendError
+from app.core.exceptions import DingTalkServiceError
 from app.repository.resume_repo import CandidateRepo
 from app.service.dingtalk_ser import get_user_available_slots
+from app.workflow.candidate_nodes.mail_notify import send_workflow_email
 from app.workflow.candidate_state import CandidateRecruitmentState
 from app.workflow.error_handler import node_error_wrapper
-from utils.time_ISO8601_datatime import now_beijing, to_naive_beijing
+from app.core.time import db_now, now_beijing
 
 settings = get_settings()
 logger = logging.getLogger(settings.NODE_LOGGER_NAME)
+
+INVITE_SUBJECT = "面试邀请-协商面试时间"
 
 
 async def _mark_invite_sent(candidate_id: str) -> None:
@@ -25,33 +28,8 @@ async def _mark_invite_sent(candidate_id: str) -> None:
         async with session.begin():
             await CandidateRepo(session).update_email_invite_sent_at(
                 candidate_id=candidate_id,
-                sent_at=to_naive_beijing(now_beijing()),
+                sent_at=db_now(),
             )
-
-
-async def send_interview_email(email: str, body: str) -> None:
-    """发送面试邀请邮件。
-
-    Raises:
-        EmailSendError: 邮件发送失败。
-    """
-    from utils.emailbot.mail_manager import get_mail_bot_
-    email_bot = get_mail_bot_()
-    subject = "面试邀请-协商面试时间"
-
-    try:
-        if not email_bot.is_connected:
-            await email_bot.connect()
-        await email_bot.send_email(
-            to=email,
-            subject=subject,
-            text=body,
-        )
-    except EmailSendError:
-        raise
-    except Exception as e:
-        logger.error("[email] send failed | to=%s | error=%s", email, e)
-        raise EmailSendError(f"发送面试邀请邮件失败: {e}") from e
 
 
 @node_error_wrapper
@@ -59,7 +37,7 @@ async def email_invite_node(state: CandidateRecruitmentState) -> dict:
     """
     发送面试邀请邮件节点。
     复用 agents/candidate.py L135-L187 的 get_interviewer_available_slot 工具逻辑
-    和 L189-L229 的 send_interview_email 工具逻辑。
+    和 L189-L229 的邀请邮件发送逻辑。
     """
     interviewer = state["interviewer"]
     candidate = state["candidate"]
@@ -90,7 +68,7 @@ async def email_invite_node(state: CandidateRecruitmentState) -> dict:
 未来7天内面试官暂时没有时间面试您，可以将面试时间改到7天后吗？
 谢谢！
 """
-        await send_interview_email(candidate.email, body=body)
+        await send_workflow_email(candidate.email, subject=INVITE_SUBJECT, text=body)
         logger.info("[email_invite] no-slot notice sent | candidate_id=%s", cid)
         # 无空闲时间同样进入协商等待，记录发送时间供超时巡检使用
         try:
@@ -123,7 +101,7 @@ async def email_invite_node(state: CandidateRecruitmentState) -> dict:
     如果不方便，请回复您方便的时间，我们将会重新协商面试时间。
     谢谢！
                 """
-    await send_interview_email(candidate.email, body=body)
+    await send_workflow_email(candidate.email, subject=INVITE_SUBJECT, text=body)
 
     logger.info("[email_invite] invite sent | candidate_id=%s", cid)
 

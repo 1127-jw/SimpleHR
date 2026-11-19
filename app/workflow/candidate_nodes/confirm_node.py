@@ -16,7 +16,7 @@ from app.repository.resume_repo import CandidateRepo
 from app.service.dingtalk_ser import create_calendar
 from app.workflow.candidate_state import CandidateRecruitmentState
 from app.workflow.error_handler import node_error_wrapper
-from utils.time_ISO8601_datatime import to_naive_beijing
+from app.core.time import to_naive_beijing
 
 settings = get_settings()
 logger = logging.getLogger(settings.NODE_LOGGER_NAME)
@@ -27,6 +27,13 @@ async def confirm_node(state: CandidateRecruitmentState) -> dict:
     """
     确认最终面试时间。
     包含：发确认邮件 + 创建钉钉日程 + 创建面试记录 + 更新候选人状态。
+
+    顺序有意设计为「先外部、后本地」：钉钉日程是整个流程里最容易失败的一步
+    （token 过期、接口限流、网络抖动），它一旦失败，异常会作为
+    ``DingTalkServiceError`` 抛出图外。若先写库再排日程，就会留下
+    「候选人已是待面试、面试记录也有，但没有日程也没有确认邮件」的脏状态，
+    人工重试也无从判断该补哪一步。现在改成：日程成功后才落库，
+    外部失败时库保持原样，流程停在 error 等人工处理。
     """
     position = state['position']
     candidate = state["candidate"]
@@ -35,11 +42,53 @@ async def confirm_node(state: CandidateRecruitmentState) -> dict:
 
     logger.info("[confirm] start | candidate_id=%s", cid)
 
-    interview_datetime: datetime = state["proposed_interview_time"]
+    # 缺这个字段只可能来自上游状态错乱（例如「无空闲时段」分支没有确定时间），
+    # 直接抛 KeyError 会变成 AppException 且看不出原因，这里给出可读的业务异常。
+    interview_datetime: datetime = state.get("proposed_interview_time")
+    if interview_datetime is None:
+        raise InterviewSchedulingError(
+            f"候选人 {cid} 缺少最终面试时间，无法确认（proposed_interview_time 为空）"
+        )
+
     # 统一使用 to_naive_beijing 剥离时区（确保存入 DB 的是北京时间数值）
     interview_datetime_without_tz = to_naive_beijing(interview_datetime)
 
-    # 1. 创建或更新面试预约记录 + 更新候选人状态
+    # 1. 获取面试官钉钉 token
+    try:
+        result = await get_access_token(interviewer)
+        if isinstance(result, str):
+            raise DingTalkServiceError(result)
+        union_id, access_token_info = result
+        access_token = access_token_info.get("access_token")
+    except DingTalkServiceError:
+        raise
+    except Exception as e:
+        logger.error("[confirm] get DingTalk token failed | candidate_id=%s | error=%s", cid, e)
+        raise DingTalkServiceError(
+            f"获取面试官钉钉授权失败: {e}"
+        ) from e
+
+    # 2. 创建钉钉日程（外部系统，先做）
+    try:
+        end_datetime: datetime = interview_datetime + timedelta(hours=1)
+        await create_calendar(
+            union_id=union_id,
+            access_token=access_token,
+            summary=f"面试安排：{position.title} - {candidate.name}",
+            start_datetime=interview_datetime,
+            end_datetime=end_datetime,
+        )
+    except DingTalkServiceError:
+        raise
+    except Exception as e:
+        logger.error("[confirm] create calendar failed | candidate_id=%s | error=%s", cid, e)
+        raise DingTalkServiceError(
+            f"创建钉钉面试日程失败: {e}"
+        ) from e
+
+    logger.info("[confirm] calendar created | candidate_id=%s", cid)
+
+    # 3. 创建或更新面试预约记录 + 更新候选人状态
     try:
         async with AsyncSessionFactory() as session:
             async with session.begin():
@@ -81,45 +130,10 @@ async def confirm_node(state: CandidateRecruitmentState) -> dict:
 
     logger.info("[confirm] interview record created | candidate_id=%s", cid)
 
-    # 2. 获取面试官钉钉 token
-    try:
-        result = await get_access_token(interviewer)
-        if isinstance(result, str):
-            raise DingTalkServiceError(result)
-        union_id, access_token_info = result
-        access_token = access_token_info.get("access_token")
-    except DingTalkServiceError:
-        raise
-    except Exception as e:
-        logger.error("[confirm] get DingTalk token failed | candidate_id=%s | error=%s", cid, e)
-        raise DingTalkServiceError(
-            f"获取面试官钉钉授权失败: {e}"
-        ) from e
-
-    # 3. 创建钉钉日程
-    try:
-        end_datetime: datetime = interview_datetime + timedelta(hours=1)
-        await create_calendar(
-            union_id=union_id,
-            access_token=access_token,
-            summary=f"面试安排：{position.title} - {candidate.name}",
-            start_datetime=interview_datetime,
-            end_datetime=end_datetime,
-        )
-    except DingTalkServiceError:
-        raise
-    except Exception as e:
-        logger.error("[confirm] create calendar failed | candidate_id=%s | error=%s", cid, e)
-        raise DingTalkServiceError(
-            f"创建钉钉面试日程失败: {e}"
-        ) from e
-
-    logger.info("[confirm] calendar created | candidate_id=%s", cid)
-
     # 4. 发送确认邮件
     subject = "面试时间确定"
     body = f"""
-    "尊敬的{candidate.name}，
+    尊敬的{candidate.name}，
     面试时间已确定：
     {interview_datetime}
     请您准时参加面试。该邮件无需再回复。谢谢！
@@ -143,7 +157,7 @@ async def confirm_node(state: CandidateRecruitmentState) -> dict:
     logger.info("[confirm] done | candidate_id=%s", cid)
 
     return {
-        "confirmed_interview_time": state["proposed_interview_time"],
+        "confirmed_interview_time": interview_datetime,
         "interview_created": True,
         "current_stage": "confirmed",
     }

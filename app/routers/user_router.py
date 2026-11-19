@@ -3,6 +3,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi import Request
 
+import secrets
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated, List
 from urllib.parse import urlencode, urljoin
@@ -17,7 +18,14 @@ from app.schemas.user_schema import UserLoginReqSH, UserLoginResSH, RefreshReque
     DepartmentListRespSchema, DingdingUserRespSchema, AssignDepartmentSchema, HrListRespSchema, UserSH, HrSchema, \
     ChangePasswordSchema
 from app.schemas.response_schema import ResponseSchema
-from app.core.auth import create_tokens, revoke_refresh_token, refresh_access_token, get_current_user, get_super_user
+from app.core.auth import (
+    create_tokens,
+    revoke_refresh_token,
+    revoke_user_sessions,
+    refresh_access_token,
+    get_current_user,
+    get_super_user,
+)
 from app.service import auth_ser
 from app.models.user import UserModel
 from app.service.auth_ser import get_invite_code
@@ -28,6 +36,10 @@ from app.service import dingtalk_ser
 from app.repository.user_repo import UserRepo
 
 settings = get_settings()
+
+# 钉钉 OAuth 一次性 state：nonce → user_id 的映射，取一次即失效。
+_DINGTALK_STATE_KEY = "dingtalk:oauth_state:{}"
+DINGTALK_STATE_TTL_SECONDS = 600
 
 jinja2Engine = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/user", tags=["user"])
@@ -112,8 +124,13 @@ async def change_password(
     password_data: ChangePasswordSchema,
     session: Annotated[AsyncSession, Depends(get_db)],
     current_user: UserModel = Depends(get_current_user),
+    r: Redis = Depends(get_redis),
 ):
-    """修改当前登录用户密码。"""
+    """修改当前登录用户密码。
+
+    改密后**吊销该用户所有已签发的 refresh token**：改密的常见起因就是
+    「密码可能泄露了」，若旧会话还能继续刷新，等于没改。
+    """
     if password_data.new_password != password_data.confirm_password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="两次输入的新密码不一致")
 
@@ -122,6 +139,9 @@ async def change_password(
 
     async with session.begin():
         current_user.password = password_data.new_password
+
+    await revoke_user_sessions(current_user.email, r)
+    audit("user.password_change", user_id=current_user.id, target=f"user:{current_user.id}")
 
     return ResponseSchema()
 
@@ -194,15 +214,20 @@ async def department_list(
 @router.get("/dingtalk/authorize", summary="获取登录钉钉的URL")
 async def dingtalk_authorize(
     current_user: UserModel = Depends(get_current_user),
+    r: Redis = Depends(get_redis),
 ):
     # redirect_uri：必须是公网能够访问的url
     redirect_uri = urljoin(settings.BACKEND_BASE_URL, "/user/dingtalk/callback")
+    # state 是一次性随机数，不能直接用 user.id：回调端点无鉴权，
+    # 若 state 可预测，攻击者可用自己的授权码把钉钉身份绑到他人账号。
+    oauth_state = secrets.token_urlsafe(24)
+    await r.setex(_DINGTALK_STATE_KEY.format(oauth_state), DINGTALK_STATE_TTL_SECONDS, current_user.id)
     params = {
         "redirect_uri": redirect_uri,
         "response_type": "code",
         "client_id": settings.DINGTALK_CLIENT_ID,
         "scope": "openid",
-        "state": current_user.id,
+        "state": oauth_state,
         "prompt": "consent"
     }
     authorize_url = f"https://login.dingtalk.com/oauth2/auth?{urlencode(params)}"
@@ -225,15 +250,22 @@ async def dingtalk_callback(
     if not state:
         raise HTTPException(status_code=400, detail="缺少 state 参数")
 
-    re_cache_key = f"dingtalk:user_retoken:{state}"
+    # 校验并消费 state：用 DELETE 的返回值判胜负——它是单条原子命令，
+    # 并发重放同一个 state 时只有拿到 1 的那个请求能继续。
+    state_key = _DINGTALK_STATE_KEY.format(state)
+    user_id = await r.get(state_key)
+    if user_id is None or await r.delete(state_key) == 0:
+        raise HTTPException(status_code=400, detail="state 无效或已过期，请重新发起钉钉授权")
+
+    re_cache_key = f"dingtalk:user_retoken:{user_id}"
     retoken = await r.get(re_cache_key)
     if retoken is None:
         # print("无retoken")
-        actoken_state = await dingtalk_ser.call_dingtalk_service(r,state,code)
+        actoken_state = await dingtalk_ser.call_dingtalk_service(r,user_id,code)
     else:
         # print("retoken",retoken)
-        actoken_state = await dingtalk_ser.refresh_user_access_token(r, state, retoken)
-    redirecot_url = await dingtalk_ser.get_dingtalk_user(session,state,actoken_state.get("access_token"))
+        actoken_state = await dingtalk_ser.refresh_user_access_token(r, user_id, retoken)
+    redirecot_url = await dingtalk_ser.get_dingtalk_user(session,user_id,actoken_state.get("access_token"))
 
     return RedirectResponse(redirecot_url)
 
