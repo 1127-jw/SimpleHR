@@ -560,7 +560,7 @@ class _LockProbe:
         self.key = key
         self.takeover_value = takeover_value
 
-    async def list_stale_email_waiters(self, cutoff, limit):
+    async def list_stale_negotiating(self, cutoff, limit=200):
         self.redis.store[self.key] = self.takeover_value
         return []
 
@@ -576,11 +576,11 @@ def sweep_env(monkeypatch, fake_redis):
         def __init__(self, session=None):
             pass
 
-        async def list_stale_email_waiters(self, cutoff, limit):
+        async def list_stale_negotiating(self, cutoff, limit=200):
             return []
 
     monkeypatch.setattr(timeout_tasks, "AsyncSessionFactory", lambda: _FakeSession())
-    monkeypatch.setattr(timeout_tasks, "CandidateRepo", _Repo)
+    monkeypatch.setattr(timeout_tasks, "CandidateStatusHistoryRepo", _Repo)
     return timeout_tasks
 
 
@@ -610,7 +610,7 @@ async def test_sweep_does_not_delete_lock_taken_over_by_peer(monkeypatch, fake_r
     monkeypatch.setattr(timeout_tasks, "AsyncSessionFactory", lambda: _FakeSession())
     monkeypatch.setattr(
         timeout_tasks,
-        "CandidateRepo",
+        "CandidateStatusHistoryRepo",
         lambda session=None: _LockProbe(fake_redis, _SWEEP_LOCK_KEY, "peer-worker"),
     )
 

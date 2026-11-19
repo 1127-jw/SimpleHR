@@ -12,6 +12,7 @@ import {
   UserFilled,
   OfficeBuilding,
   Message,
+  ChatDotRound,
   SwitchButton,
   Setting,
 } from '@element-plus/icons-vue'
@@ -34,6 +35,7 @@ const navItems: NavItem[] = [
   { to: '/positions', label: '职位管理', icon: Postcard },
   { to: '/candidates', label: '候选人管理', icon: User },
   { to: '/candidates/mail-submissions', label: '邮件投递确认', icon: Message },
+  { to: '/candidates/mail-reviews', label: '意图复核', icon: ChatDotRound },
   { to: '/employees', label: '员工管理', icon: OfficeBuilding },
 ]
 

@@ -113,7 +113,7 @@ async def confirm(
         msg = str(e)
         if "不存在" in msg:
             raise HTTPException(status_code=404, detail=msg)
-        if "不可确认" in msg:
+        if "不可确认" in msg or "已有进行中的流程" in msg:
             raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=400, detail=msg)
 

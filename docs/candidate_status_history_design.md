@@ -5,8 +5,9 @@
 > ① **细分终态 + `archived_at`**（不把 `candidates.status` 覆盖成「已归档」）；
 > ② 超时起算用 `COALESCE(last_email_received_at, changed_at)`；
 > ③ `candidates.status` 保留细分值，归档信息放 `archived_at`；
-> ④ `confirm` **不走归档**，走**独立结算节点**（`next_id = '-2'`，状态置「待面试」）；
-> ⑤ 其余终态（淘汰/拒绝/协商超时/异常）走归档（`next_id = '-1'`，写 `archived_at`）；
+> ④ `confirm` 走**独立结算节点**（`next_id = '-2'`，状态置「待面试」）；
+>    其余终态（淘汰/拒绝/协商超时/异常）走归档（`next_id = '-1'`）；
+> ⑤ **归档与结算都写 `archived_at`**——它表示「图流程走完」，不是「被淘汰」；
 > ⑥ 创建候选人支持 `skip_scoring`：跳过筛选与评分，**直达 `email_invite`**（见 §3.4）；
 > ⑦ 修复「人工重试不写链记录」的 bug（见 §5.4）。
 
@@ -77,7 +78,7 @@
 ### 3.2 `candidates` 表新增字段
 
 ```sql
-ALTER TABLE candidates ADD COLUMN archived_at TIMESTAMP;   -- NULL=未归档
+ALTER TABLE candidates ADD COLUMN archived_at TIMESTAMP;   -- NULL=流程仍在进行
 CREATE INDEX ix_candidates_archived_at ON candidates (archived_at);
 ```
 
@@ -95,7 +96,7 @@ scoring 通过
          └─ archive ─> （终态，写 archived_at）──────────────┤
 scoring 未通过 ─> AI_FILTER_FAILED ──────────────────────────┤
 error ───────────────────────────────────────────────────────┤
-              ↓ 归档节点 archive_node（next_id = '-1'，写 archived_at）
+              ↓ 收尾节点（archive: next_id='-1'；settle: next_id='-2'；两者都写 archived_at）
                                 END
 ```
 
@@ -128,10 +129,12 @@ error ────────────────────────�
 |---|---|---|---|---|
 | `NULL` | 链上最新（活跃） | 每次新变更 | 当前状态 | NULL |
 | `'-1'` | **归档**终止 | 淘汰/拒绝/协商超时/异常 | **保留细分值** | 写时间 |
-| `'-2'` | **结算**终止 | `confirm` 确认面试时间 | `待面试`（细分保留） | NULL |
+| `'-2'` | **结算**终止 | `confirm` 确认面试时间 | `待面试`（细分保留） | **写时间** |
 
-**结算后转人工维护**：`-2` 表示「图流程正常走完，后续由 HR 手动改状态（已入职等）」。
-所以 `confirm` 不该写 `archived_at`——人还在流程里。
+**`archived_at` 的语义是「图流程走完」，不是「被淘汰」**：归档与结算**都会写**。
+区别只在 `next_id`——`-1` 是淘汰/放弃/异常收尾，`-2` 是流程正常完成（转人工维护，
+后续 HR 手动改「已入职 / 已拒绝 / …」）。两者都不再需要图自动跟进，
+所以归档筛选（`archived_at IS NOT NULL`）会把「待面试」的结算态也包含进来，这是预期。
 
 **归档后可重新发起**：HR 再点「人工通过/重试」→ **同一个 thread**、用 `Command(goto=...)` 重新进入
 （实测：已 END 的图用 `goto` 可唤醒，不需要新图），同时**往链表追加一条新记录**（旧链保持 `-1`/`-2`）。
@@ -353,7 +356,33 @@ WHERE candidate_email = :email AND next_id IS NULL;
 
 ## 九、历史数据与发布
 
-### 9.1 历史数据必须初始化
+### 9.1 先建模型，再生成迁移（不要手写 DDL）
+
+项目已有 Alembic，且 `alembic/env.py` 已配置 `target_metadata = Base.metadata`（支持
+`--autogenerate`）。因此**正确顺序**是「模型 → 迁移」，不是「建表 → 补模型」：
+
+```
+1. 在 app/models/ 定义模型
+   - CandidateStatusHistoryModel（新表）
+   - CandidateModel 增加 archived_at 列
+2. 在 app/models/__init__.py 注册新模型（env.py 从 app.models 导入，
+   不注册会导致 autogenerate 看不到这张表）
+3. alembic revision --autogenerate -m "candidate status history"
+4. 人工补 autogenerate 抓不到的三部分：
+   - ALTER TYPE candidatestatusenum ADD VALUE '面试时间协商中'（枚举不会自动生成）
+   - 部分唯一索引 ux_csh_active（WHERE next_id IS NULL，需确认是否生成）
+   - 回填历史数据（§9.2）
+5. alembic upgrade head
+```
+
+**为什么坚持这个顺序**：手写 DDL 和模型定义容易漂移（字段类型、可空性、索引），
+之后 `--autogenerate` 会一直报 diff；反过来以模型为准，迁移永远可由模型重新生成。
+`op.execute("ALTER TYPE ...")` 和回填这类**模型无法表达**的改动，留在生成的迁移里手工补。
+
+> 现有迁移文件（如 `a1b2c3d4e5f6_add_manual_passed_to_candidatestatusenum.py`）
+> 是早期手写 DDL 的产物，不应当作模板。
+
+### 9.2 历史数据必须初始化
 
 老候选人没有链表记录。若不补，§8 的查重会认为「该邮箱无记录」→ **允许重复建图**。
 
@@ -378,6 +407,9 @@ candidates.archived_at = 终态（已入职/已拒绝/拒绝面试/协商超时/
 ```
 
 顺序颠倒就是 §1.2 缺陷 A 的重演（写库直接 `DataError`）。
+
+> 注意 §9.1 的顺序是「**先建模型再生成迁移**」，这里是「**先跑迁移再发代码**」——
+> 两件事不冲突：模型/迁移的开发顺序，与迁移/发版的执行顺序。
 
 ---
 

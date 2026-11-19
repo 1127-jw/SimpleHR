@@ -18,6 +18,7 @@ from app.core.checkpointer import get_checkpointer
 from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
 from app.core.redis_client import get_redis
+from app.repository.candidate_history_repo import CandidateStatusHistoryRepo
 from app.repository.resume_repo import CandidateRepo
 from app.service.candidate_status_ser import mark_candidate_error
 from app.tasks.periodic_task import PeriodicTaskManager
@@ -26,6 +27,7 @@ from app.workflow.candidate_state import (
     EMAIL_REPLY_INTERRUPT,
     EMAIL_REPLY_TIMEOUT,
     is_waiting_on,
+    thread_id_of,
 )
 from app.core.time import db_now
 
@@ -78,22 +80,25 @@ async def sweep_stale_email_replies() -> int:
 
         async with AsyncSessionFactory() as session:
             async with session.begin():
-                candidates = await CandidateRepo(session).list_stale_email_waiters(
+                # 取数改为「状态变更链」：只扫协商中 + 链上最新 + 起算时间超时的。
+                # 比原来的 email_invite_sent_at 判据精确——那是流程级字段，
+                # 同邮箱的多条记录会互相干扰（实测过误伤）。
+                rows = await CandidateStatusHistoryRepo(session).list_stale_negotiating(
                     cutoff, limit=_SWEEP_BATCH_LIMIT
                 )
 
-        if not candidates:
+        if not rows:
             return 0
 
-        logger.info(
-            "[timeout_sweep] 发现 %s 个等待回复超时的候选人", len(candidates)
-        )
+        logger.info("[timeout_sweep] 发现 %s 个等待回复超时的候选人", len(rows))
 
         candidate_graph = build_candidate_graph(get_checkpointer())
         swept = 0
 
-        for candidate in candidates:
-            config = {"configurable": {"thread_id": candidate.email}}
+        for row in rows:
+            # thread_id 按 candidate_id 隔离，不用邮箱——否则会唤醒同邮箱
+            # 另一条记录的中断点（实测事故根因）。
+            config = {"configurable": {"thread_id": thread_id_of(row.candidate_id)}}
             try:
                 # 仅当挂起的是「等待候选人回复」这个中断点时才 resume。
                 # 只看「有没有中断点」是不够的：图里还有其他 interrupt 节点
@@ -102,7 +107,7 @@ async def sweep_stale_email_replies() -> int:
                 if not is_waiting_on(snapshot.interrupts, EMAIL_REPLY_INTERRUPT):
                     logger.info(
                         "[timeout_sweep] 中断点不是等待候选人回复，跳过 | candidate_id=%s",
-                        candidate.id,
+                        row.candidate_id,
                     )
                     continue
 
@@ -113,7 +118,7 @@ async def sweep_stale_email_replies() -> int:
                     # 恢复侧打 thread_id：与挂起处的日志配对，定位「谁被唤醒了」
                     logger.info(
                         "[timeout_sweep] 恢复超时的招聘图 | candidate_id=%s | thread_id=%s",
-                        candidate.id, candidate.email,
+                        row.candidate_id, thread_id_of(row.candidate_id),
                     )
                     await candidate_graph.ainvoke(
                         Command(resume=EMAIL_REPLY_TIMEOUT), config
@@ -121,16 +126,16 @@ async def sweep_stale_email_replies() -> int:
                 swept += 1
                 logger.info(
                     "[timeout_sweep] 已推进到协商超时 | candidate_id=%s | email=%s",
-                    candidate.id, candidate.email,
+                    row.candidate_id, row.candidate_email,
                 )
             except Exception as e:
                 logger.exception(
                     "[timeout_sweep] 推进失败 | candidate_id=%s | email=%s",
-                    candidate.id, candidate.email,
+                    row.candidate_id, row.candidate_email,
                 )
                 # 后台链路：异常不会经过全局处理器，就地标记为可重试
                 await mark_candidate_error(
-                    candidate.id, f"超时推进失败: {e}"
+                    row.candidate_id, f"超时推进失败: {e}"
                 )
 
         return swept

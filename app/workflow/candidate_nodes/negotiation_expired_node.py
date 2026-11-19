@@ -27,7 +27,7 @@ async def _notify_candidate_expired(candidate) -> None:
 尊敬的{candidate.name}，
 您好！
 我们多次尝试与您确认面试时间，但暂未收到有效回复，本次面试时间协商已暂停。
-如您仍对该职位感兴趣，欢迎直接回复本邮件，我们会尽快重新安排。
+如您仍对该职位感兴趣，欢迎重新投递简历，我们会尽快重新安排。
 谢谢！
 """
         await email_bot.send_email(

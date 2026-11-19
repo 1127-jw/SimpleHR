@@ -38,6 +38,14 @@ class CandidateCreateSchema(BaseModel):
 
     position_id: str = Field(..., description="候选人申请职位ID")
     resume_id: str = Field(..., description="候选人的简历ID")
+    skip_scoring: bool = Field(
+        False,
+        description=(
+            "跳过筛选与 AI 评分，直达面试邀请。"
+            "适用于 HR 已认可候选人、不想走自动评估的场景；"
+            "勾选后不会产生 AI 评分记录。"
+        ),
+    )
 
 
 class CandidateSchema(BaseModel):

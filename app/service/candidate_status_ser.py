@@ -10,24 +10,29 @@
 import logging
 
 from langgraph.types import Command
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
 from app.core.exceptions import StatusFlowError
-from app.models.candidate import CandidateStatusEnum
+from app.models.candidate import CandidateModel, CandidateStatusEnum
+from app.repository.candidate_history_repo import CandidateStatusHistoryRepo
 from app.repository.resume_repo import CandidateRepo
 from app.repository.Interview_repo import InterviewRepo
 from app.schemas.candidate_schema import CandidateSchema
 from app.schemas.position_schema import PositionSchema
 from app.schemas.user_schema import UserSH
 from app.core.checkpointer import get_checkpointer
+from app.core.time import db_now
 from app.workflow.candidate_graph import build_candidate_graph
 from app.workflow.candidate_state import (
     MANUAL_DECISION_APPROVE,
+    MANUAL_DECISION_ARCHIVE,
     MANUAL_DECISION_INTERRUPT,
     MANUAL_DECISION_REJECT,
     is_waiting_on,
+    thread_id_of,
 )
 
 settings = get_settings()
@@ -41,22 +46,33 @@ ALLOWED_TRANSITIONS: dict[CandidateStatusEnum, set[CandidateStatusEnum]] = {
     # 初始状态
     CandidateStatusEnum.APPLICATION: {
         CandidateStatusEnum.AI_FILTER_FAILED,
-        CandidateStatusEnum.AI_FILTER_PASSED,
+        # 评分达标后直接进人工确认（AI筛选成功不再是需要人工再点一次的中间态）
+        CandidateStatusEnum.PENDING_MANUAL_DECISION,
     },
-    # AI 筛选失败后：可以人工通过/重试
+    # AI 筛选失败后：人工重试，或（归档后）补标细分终态
     CandidateStatusEnum.AI_FILTER_FAILED: {
         CandidateStatusEnum.MANUAL_PASSED,
+        CandidateStatusEnum.REJECTED,
+        CandidateStatusEnum.HIRED,
     },
-    # AI 筛选成功后：进入人工闸门，或（历史/自动路径）直接待面试
+    # AI 筛选成功：保留给历史数据 / 统计；新流程不再产生该状态
+    # （评分达标直接进 PENDING_MANUAL_DECISION）
     CandidateStatusEnum.AI_FILTER_PASSED: {
         CandidateStatusEnum.PENDING_MANUAL_DECISION,
         CandidateStatusEnum.WAITING_FOR_INTERVIEW,
     },
-    # 待人工确认：确认发送（回到 AI 筛选成功，由流程继续）或淘汰
+    # 待人工确认：确认发送（进入协商）、淘汰，或归档（保持当前状态）
     CandidateStatusEnum.PENDING_MANUAL_DECISION: {
-        CandidateStatusEnum.AI_FILTER_PASSED,
+        CandidateStatusEnum.NEGOTIATING,
         CandidateStatusEnum.AI_FILTER_FAILED,
     },
+    # 面试时间协商中：候选人拒绝 / 轮次耗尽 / 回复超时
+    CandidateStatusEnum.NEGOTIATING: {
+        CandidateStatusEnum.REFUSED_INTERVIEW,
+        CandidateStatusEnum.NEGOTIATION_EXPIRED,
+        CandidateStatusEnum.WAITING_FOR_INTERVIEW,
+    },
+    # 归档后允许 HR 补标细分终态（归档信息在 candidates.archived_at）
     # 协商超时后：可以人工通过/重试
     CandidateStatusEnum.NEGOTIATION_EXPIRED: {
         CandidateStatusEnum.MANUAL_PASSED,
@@ -182,7 +198,26 @@ async def trigger_manual_retry(candidate_id: str) -> None:
         candidate_id
     )
 
-    # 2. 保留旧检查点，直接跳转到 email_invite 节点
+    # 2. 写链：旧链终止 + 开新链（这是「归档后重新发起」的落地方式）
+    async with AsyncSessionFactory() as session:
+        async with session.begin():
+            await CandidateStatusHistoryRepo(session).start_new_chain(
+                candidate_id,
+                to_status=CandidateStatusEnum.NEGOTIATING.value,
+                from_status=str(candidate_schema.status),
+                candidate_email=candidate_schema.email,
+                position_id=position_schema.id,
+                position_title=position_schema.title,
+            )
+            # 重新发起即「未归档」：不清掉的话，归档筛选会把这条正在进行的流程
+            # 当成已归档（archived_at 还是上一轮的时间）。
+            await session.execute(
+                update(CandidateModel)
+                .where(CandidateModel.id == candidate_id)
+                .values(archived_at=None)
+            )
+
+    # 3. 保留旧检查点，直接跳转到 email_invite 节点
     candidate_graph = build_candidate_graph(get_checkpointer())
 
     from app.core.limiters import task_slot
@@ -209,11 +244,15 @@ async def trigger_manual_retry(candidate_id: str) -> None:
                     "email_sent_at": None,
                     # 设置新阶段
                     "current_stage": "email_invite",
-                    # 标记人工触发
+                    # skip_scoring 必须为真。实测 ``goto="email_invite"`` 在这条路径上
+                    # **仍会先经过 screening / scoring 节点**（日志里能看到 route_screening）：
+                    # 不跳过的后果有两个——重复插入 AI 评分（撞
+                    # ix_candidate_ai_scores_candidate_id），以及 scoring 走正常分支后
+                    # 再次发邀请 / 再进一次人工闸门。
                     "skip_scoring": True,
                 },
             ),
-            config={"configurable": {"thread_id": candidate_schema.email}},
+            config={"configurable": {"thread_id": thread_id_of(candidate_id)}},
         )
 
     logger.info(
@@ -231,18 +270,23 @@ async def resume_manual_decision(candidate_id: str, decision: str) -> None:
 
     Args:
         candidate_id: 候选人 ID。
-        decision: ``MANUAL_DECISION_APPROVE`` / ``MANUAL_DECISION_REJECT``。
+        decision: ``MANUAL_DECISION_APPROVE`` / ``MANUAL_DECISION_REJECT``
+            / ``MANUAL_DECISION_ARCHIVE``。
 
     Raises:
         StatusFlowError: 候选人不存在，或当前并不停在人工闸门（防止误 resume）。
     """
-    if decision not in (MANUAL_DECISION_APPROVE, MANUAL_DECISION_REJECT):
+    if decision not in (
+        MANUAL_DECISION_APPROVE,
+        MANUAL_DECISION_REJECT,
+        MANUAL_DECISION_ARCHIVE,
+    ):
         raise StatusFlowError(f"未知的人工决定: {decision!r}")
 
     candidate_schema, position_schema, interviewer_schema = await _load_graph_models(
         candidate_id
     )
-    thread_id = candidate_schema.email
+    thread_id = thread_id_of(candidate_id)
 
     candidate_graph = build_candidate_graph(get_checkpointer())
 
@@ -256,6 +300,31 @@ async def resume_manual_decision(candidate_id: str, decision: str) -> None:
         raise StatusFlowError(
             f"候选人 {candidate_id} 状态为 {candidate_schema.status}，不是待人工确认"
         )
+
+    # 归档决定：链尾直接置 '-1'，不必再走图（图侧 archive_node 也会写，
+    # 但那条路径要求 interrupt 被 resume；这里已经确定要归档，就地收口更直接）。
+    if decision == MANUAL_DECISION_ARCHIVE:
+        async with AsyncSessionFactory() as session:
+            async with session.begin():
+                await CandidateStatusHistoryRepo(session).mark_archived(
+                    candidate_id,
+                    to_status=str(candidate_schema.status),
+                    from_status=str(candidate_schema.status),
+                    candidate_email=candidate_schema.email,
+                    position_id=position_schema.id,
+                    position_title=position_schema.title,
+                )
+                from sqlalchemy import update
+
+                from app.models.candidate import CandidateModel
+
+                await session.execute(
+                    update(CandidateModel)
+                    .where(CandidateModel.id == candidate_id)
+                    .values(archived_at=db_now())
+                )
+        logger.info("[manual_decision] candidate_id=%s | archive | 已就地归档", candidate_id)
+        return
 
     from app.core.limiters import task_slot
 

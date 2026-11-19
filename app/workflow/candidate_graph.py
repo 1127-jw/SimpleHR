@@ -8,12 +8,15 @@ from app.workflow.candidate_state import (
     CandidateRecruitmentState,
     EMAIL_REPLY_TIMEOUT,
     MANUAL_DECISION_APPROVE,
+    MANUAL_DECISION_ARCHIVE,
     REPLY_REFUSED,
     REPLY_SLOT_TAKEN,
     REPLY_TIME_AVAILABLE,
     DEFAULT_SCORE_PASS_THRESHOLD,
     DEFAULT_MAX_NEGOTIATION_ROUNDS,
 )
+from app.workflow.candidate_nodes.archive_node import archive_node
+from app.workflow.candidate_nodes.settle_node import settle_node
 from app.workflow.candidate_nodes.check_availability_node import check_availability_node
 from app.workflow.candidate_nodes.confirm_node import confirm_node
 from app.workflow.candidate_nodes.email_invite_node import email_invite_node
@@ -121,10 +124,15 @@ def route_after_recheck_interview_slot(state: CandidateRecruitmentState) -> str:
 
 
 def route_after_manual_decision(state: CandidateRecruitmentState) -> str:
-    """人工闸门之后的路由：确认发送 → 邀请邮件；否则淘汰。"""
+    """人工闸门之后的路由：发送 / 淘汰 / 归档。"""
     cid = state["candidate"].id
     decision = state.get("manual_decision")
-    dest = "email_invite" if decision == MANUAL_DECISION_APPROVE else "rejected"
+    if decision == MANUAL_DECISION_APPROVE:
+        dest = "email_invite"
+    elif decision == MANUAL_DECISION_ARCHIVE:
+        dest = "archive"
+    else:
+        dest = "rejected"
     logger.info(
         "[route_manual_decision] candidate_id=%s | decision=%s | dest=%s",
         cid, decision, dest,
@@ -136,8 +144,15 @@ def _route_after_scoring(state: CandidateRecruitmentState) -> str:
     """scoring 节点之后的路由：达阈值进人工闸门，否则淘汰。
 
     通过之后**不直接**发邀请邮件，而是先停在 ``manual_decision`` 由 HR 拍板。
+
+    例外：``skip_scoring`` 为真时**直达 ``email_invite````——创建候选人时勾了
+    「跳过筛选」就表示 HR 已经拍过板，再走一次闸门是重复劳动。
     """
     cid = state["candidate"].id
+    if state.get("skip_scoring"):
+        logger.info("[route_scoring] skip_scoring=True，直达邀请 | candidate_id=%s", cid)
+        return "email_invite"
+
     threshold = state.get("score_pass_threshold") or DEFAULT_SCORE_PASS_THRESHOLD
     score_result = state.get("score_result")
     passed = score_result and score_result.overall_score > threshold
@@ -180,14 +195,20 @@ def build_candidate_graph(
     graph.add_node("refused", refused_node)
     graph.add_node("negotiation_expired", negotiation_expired_node)
     graph.add_node("error", error_node)
+    graph.add_node("archive", archive_node)
+    graph.add_node("settle", settle_node)
 
     # === 静态边 ===
     graph.add_edge(START, "screening")
-    graph.add_edge("rejected", END)
-    graph.add_edge("refused", END)
-    graph.add_edge("confirm", END)
-    graph.add_edge("negotiation_expired", END)
-    graph.add_edge("error", END)
+
+    # 收尾：confirm → 结算（保留「待面试」，不归档）；
+    # 其余终态 → 归档（写 archived_at）。所有终态都必须经过收尾节点，
+    # 不能直连 END——否则链表里不会有终止记录。
+    graph.add_edge("confirm", "settle")
+    for node in ("rejected", "refused", "negotiation_expired", "error"):
+        graph.add_edge(node, "archive")
+    graph.add_edge("settle", END)
+    graph.add_edge("archive", END)
 
     # === 条件边：screening → scoring 或 rejected ===
     graph.add_conditional_edges(
@@ -202,18 +223,20 @@ def build_candidate_graph(
         _with_error_check(_route_after_scoring),
         {
             "manual_decision": "manual_decision",
+            "email_invite": "email_invite",   # skip_scoring=True：直达邀请
             "rejected": "rejected",
             "error": "error",
         }
     )
 
-    # === 条件边：人工闸门 → 邀请邮件 或 rejected ===
+    # === 条件边：人工闸门 → 邀请邮件 / rejected / 归档 ===
     graph.add_conditional_edges(
         "manual_decision",
         _with_error_check(route_after_manual_decision),
         {
             "email_invite": "email_invite",
             "rejected": "rejected",
+            "archive": "archive",
             "error": "error",
         }
     )

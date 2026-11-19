@@ -11,6 +11,7 @@ from app.schemas.user_schema import UserSH
 from app.core.checkpointer import get_checkpointer
 from app.service.candidate_status_ser import mark_candidate_error
 from app.workflow.candidate_graph import build_candidate_graph
+from app.workflow.candidate_state import thread_id_of
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ async def run_candidate_agent(
     *,
     score_pass_threshold: int | None = None,
     max_negotiation_rounds: int | None = None,
+    skip_scoring: bool = False,
 ):
     """执行候选人招聘流程 Agent（任务级并发限流）。
 
@@ -47,6 +49,7 @@ async def run_candidate_agent(
             candidate, position, interviewer,
             score_pass_threshold=score_pass_threshold,
             max_negotiation_rounds=max_negotiation_rounds,
+            skip_scoring=skip_scoring,
         )
 
 
@@ -57,6 +60,7 @@ async def _run_candidate_agent_impl(
     *,
     score_pass_threshold: int | None = None,
     max_negotiation_rounds: int | None = None,
+    skip_scoring: bool = False,
 ):
     """执行候选人招聘流程 Agent。
 
@@ -76,6 +80,7 @@ async def _run_candidate_agent_impl(
         interviewer: 面试官信息。
         score_pass_threshold: AI 评分通过阈值，默认取 Settings。
         max_negotiation_rounds: 协商轮次上限，默认取 Settings。
+        skip_scoring: 跳过筛选与评分，直达邀请邮件（HR 已认可候选人时用）。
 
     Returns:
         正常结束时返回状态图结果 dict；基础设施异常结束时返回 None。
@@ -98,7 +103,7 @@ async def _run_candidate_agent_impl(
                             ),
                         }
                     ],
-                    thread_id=candidate.email,
+                    thread_id=thread_id_of(candidate.id),
                 )
                 logger.debug(res)
             return res
@@ -118,7 +123,7 @@ async def _run_candidate_agent_impl(
 
             # 启动新流程前清除旧的 checkpoint，避免重放历史错误状态
             # 注意：notify.py 中通过 Command(resume=...) 恢复流程时不受影响
-            await checkpointer.adelete_thread(candidate.email)
+            await checkpointer.adelete_thread(thread_id_of(candidate.id))
 
             candidate_graph = build_candidate_graph(
                 checkpointer,
@@ -133,9 +138,10 @@ async def _run_candidate_agent_impl(
                     "current_stage": "screening",
                     "score_pass_threshold": score_pass_threshold or settings.SCORE_PASS_THRESHOLD,
                     "max_negotiation_rounds": max_negotiation_rounds or settings.MAX_NEGOTIATION_ROUNDS,
+                    "skip_scoring": skip_scoring,
                 },
                 config={
-                    "configurable": {"thread_id": candidate.email},
+                    "configurable": {"thread_id": thread_id_of(candidate.id)},
                     "recursion_limit": GRAPH_RECURSION_LIMIT,
                 },
             )

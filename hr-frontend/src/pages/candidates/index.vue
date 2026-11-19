@@ -265,9 +265,16 @@
               @click="handleManualDecision('reject')"
               >不发送，淘汰</el-button
             >
+            <el-button
+              size="small"
+              :loading="manualSubmitting"
+              @click="handleManualDecision('archive')"
+              >归档，不再跟进</el-button
+            >
           </div>
           <div class="text-xs text-muted">
-            「发送邮件」会继续协商面试时间的流程；「不发送」会把候选人置为 AI 筛选失败。
+            「发送邮件」会继续协商面试时间的流程；「不发送」会把候选人置为 AI 筛选失败；
+            「归档」直接结束流程（状态保持当前值，之后仍可补标细分终态）。
           </div>
         </div>
       </el-dialog>
@@ -426,12 +433,17 @@ const openManualDecision = (candidate: Candidate) => {
   manualDialogVisible.value = true
 }
 
-const handleManualDecision = async (decision: 'approve' | 'reject') => {
+const handleManualDecision = async (decision: 'approve' | 'reject' | 'archive') => {
   if (!manualCandidate.value) return
   try {
     manualSubmitting.value = true
     await submitManualDecision(manualCandidate.value.id, decision)
-    ElMessage.success(decision === 'approve' ? '已发送面试邀请' : '已淘汰该候选人')
+    const tips: Record<string, string> = {
+      approve: '已发送面试邀请',
+      reject: '已淘汰该候选人',
+      archive: '已归档该候选人',
+    }
+    ElMessage.success(tips[decision])
     manualDialogVisible.value = false
     await fetchCandidates()
   } catch (e: any) {
@@ -492,6 +504,8 @@ const getStatusTagType = (status: string): string => {
       return 'danger'
     case '待人工确认':
       return 'warning'
+    case '面试时间协商中':
+      return 'primary'
     default:
       return 'default'
   }

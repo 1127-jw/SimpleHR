@@ -92,6 +92,14 @@
               <el-input type="textarea" v-model="ocrResult.other_information" :rows="3"></el-input>
             </el-form-item>
             <el-form-item>
+              <el-checkbox v-model="skipScoring">
+                跳过筛选与 AI 评分，直接发送面试邀请
+              </el-checkbox>
+              <p class="form-tip">
+                勾选后不产生 AI 评分记录；候选人将直接进入面试时间协商。
+              </p>
+            </el-form-item>
+            <el-form-item>
               <div class="text-right">
                 <el-button type="primary" @click="createCandidateFunc">确定</el-button>
               </div>
@@ -150,6 +158,9 @@ const resumeId = ref<string | null>(null)
 const resumeUrl = ref<string | null>(null)
 const ocrResult = ref<Partial<OcrResult>>({})
 const router = useRouter()
+
+// 「跳过筛选与 AI 评分」：HR 已认可候选人时直接发起面试邀请
+const skipScoring = ref(false)
 
 const goBackToCandidates = (): void => {
   router.push({ name: 'candidates' })
@@ -280,6 +291,7 @@ const createCandidateFunc = async (): Promise<void> => {
     ...ocrResult.value,
     position_id: selectedPosition.value,
     resume_id: resumeId.value,
+    skip_scoring: skipScoring.value,
   }
 
   fullLoading.show('候选人创建中...')

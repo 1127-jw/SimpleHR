@@ -18,23 +18,36 @@ export enum CandidateStatusEnum {
   PROCESSING_ERROR = '处理异常',
   // AI 评分通过后、发送邀请邮件前的人工闸门
   PENDING_MANUAL_DECISION = '待人工确认',
+  // 已发出邀请，等候选人回复或改约
+  NEGOTIATING = '面试时间协商中',
 }
 
 // 允许的状态转移表（与后端保持一致）
 export const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   [CandidateStatusEnum.APPLICATION]: [
     CandidateStatusEnum.AI_FILTER_FAILED,
-    CandidateStatusEnum.AI_FILTER_PASSED,
-  ],
-  [CandidateStatusEnum.AI_FILTER_FAILED]: [CandidateStatusEnum.MANUAL_PASSED],
-  [CandidateStatusEnum.AI_FILTER_PASSED]: [
+    // 评分达标直接进人工确认，AI筛选成功不再是需要手动再点一次的中间态
     CandidateStatusEnum.PENDING_MANUAL_DECISION,
+  ],
+  // 归档后允许 HR 补标细分终态
+  [CandidateStatusEnum.AI_FILTER_FAILED]: [
+    CandidateStatusEnum.MANUAL_PASSED,
+    CandidateStatusEnum.REJECTED,
+    CandidateStatusEnum.HIRED,
+  ],
+  [CandidateStatusEnum.AI_FILTER_PASSED]: [
     CandidateStatusEnum.WAITING_FOR_INTERVIEW,
   ],
-  // 待人工确认：确认发送（回到 AI 筛选成功，由流程继续）或直接淘汰
+  // 待人工确认：确认发送（进入协商）、淘汰
   [CandidateStatusEnum.PENDING_MANUAL_DECISION]: [
-    CandidateStatusEnum.AI_FILTER_PASSED,
+    CandidateStatusEnum.NEGOTIATING,
     CandidateStatusEnum.AI_FILTER_FAILED,
+  ],
+  // 面试时间协商中：拒绝 / 轮次耗尽 / 回复超时 / 确认时间
+  [CandidateStatusEnum.NEGOTIATING]: [
+    CandidateStatusEnum.REFUSED_INTERVIEW,
+    CandidateStatusEnum.NEGOTIATION_EXPIRED,
+    CandidateStatusEnum.WAITING_FOR_INTERVIEW,
   ],
   [CandidateStatusEnum.NEGOTIATION_EXPIRED]: [CandidateStatusEnum.MANUAL_PASSED],
   [CandidateStatusEnum.PROCESSING_ERROR]: [CandidateStatusEnum.MANUAL_PASSED],
@@ -143,6 +156,8 @@ export interface CandidateCreateData {
   work_year?: number | null
   position_id: string
   resume_id: string
+  /** 跳过筛选与 AI 评分，直达面试邀请（不产生 AI 评分记录） */
+  skip_scoring?: boolean
 }
 
 export interface CandidateStatusUpdateData {
@@ -217,9 +232,12 @@ export const updateCandidateStatus = (candidateId: string, data: CandidateStatus
 
 /**
  * 人工闸门：决定是否给候选人发送面试邀请邮件，唤醒暂停的招聘图。
- * approve = 发送并继续；reject = 不发送，淘汰。
+ * approve = 发送并继续；reject = 不发送，淘汰；archive = 直接归档收尾。
  */
-export const submitManualDecision = (candidateId: string, decision: 'approve' | 'reject') => {
+export const submitManualDecision = (
+  candidateId: string,
+  decision: 'approve' | 'reject' | 'archive',
+) => {
   return httpRequest.post(`/candidate/${candidateId}/manual-decision`, { decision })
 }
 

@@ -22,36 +22,55 @@ from utils.emailbot.rules import MailRule
 from app.core.db import AsyncSessionFactory
 from app.core.checkpointer import get_checkpointer
 from app.core.config import get_settings
+from app.core.time import db_now
 from app.models.candidate import CandidateStatusEnum
+from app.repository.candidate_history_repo import CandidateStatusHistoryRepo
 from app.repository.resume_repo import CandidateRepo
 from app.schemas.candidate_schema import CandidateSchema
 from app.schemas.position_schema import PositionSchema
 from app.schemas.user_schema import UserSH
 from app.workflow.candidate_graph import build_candidate_graph
+from app.workflow.candidate_state import EMAIL_REPLY_INTERRUPT, is_waiting_on, thread_id_of
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
-# 允许恢复协商图的候选人状态（与既有兜底逻辑保持一致）
+# 允许恢复协商图的候选人状态（与既有兜底逻辑保持一致）。
+# NEGOTIATING 是「进入面试时间协商」后的新状态，漏掉它会导致回复邮件不恢复图。
 _RESUMABLE_STATUS = (
     CandidateStatusEnum.MANUAL_PASSED,
     CandidateStatusEnum.AI_FILTER_PASSED,
+    CandidateStatusEnum.NEGOTIATING,
 )
 
 
 async def _find_candidate_by_email(email_address: str):
-    """根据邮箱地址查找候选人（含职位与面试官）。"""
+    """根据邮箱地址查找候选人（含职位与面试官）。
+
+    **同一邮箱可能有多条候选人记录**（多次投递）。``get_by_email`` 返回的是
+    任意一条，会把流程恢复到错误的记录上；这里按状态变更链挑「当前活跃」的那条
+    （``next_id IS NULL``），没有活跃链再退回最新创建的。
+    """
     async with AsyncSessionFactory() as session:
-        repo = CandidateRepo(session)
-        candidate = await repo.get_by_email(email_address)
-        if not candidate:
+        rows = await CandidateRepo(session).list_by_email(email_address)
+        if not rows:
             return None, None, None
+
+        history = CandidateStatusHistoryRepo(session)
+        chosen = None
+        for row in rows:
+            if await history.get_active(row.id) is not None:
+                chosen = row
+                break
+        if chosen is None:
+            chosen = rows[0]
+
         # 必须在 session 内访问关联对象并转 Schema，避免 DetachedInstanceError
         return (
-            CandidateSchema.model_validate(candidate),
-            PositionSchema.model_validate(candidate.position),
-            UserSH.model_validate(candidate.creator),
+            CandidateSchema.model_validate(chosen),
+            PositionSchema.model_validate(chosen.position),
+            UserSH.model_validate(chosen.creator),
         )
 
 
@@ -101,15 +120,34 @@ async def notify(email: ParsedEmail, rule: MailRule | None = None) -> MailIntent
     if candidate_schema:
         role = SenderRole.CANDIDATE
         candidate_status = str(candidate_schema.status)
-        # thread_id 与建图时保持一致（app/tasks/agent_tasks.py 用 candidate.email）
-        thread_id = candidate_schema.email
+        # thread_id 与建图时保持一致：按 candidate_id 隔离（见 app/tasks/agent_tasks.py）
+        thread_id = thread_id_of(candidate_schema.id)
     else:
         role = SenderRole.UNKNOWN
         candidate_status = ""
-        thread_id = email.from_.address
+        thread_id = f"unknown:{email.from_.address}"
 
     # ---- L3 前置校验：是否在等待回复 ----
     waiting_reply = await _waiting_reply(thread_id) if candidate_schema else False
+
+    # 收到候选人本人的邮件 → 更新「最后接到邮件时间」，供超时巡检做判据。
+    # 只有 CANDIDATE 才算：面试官邮件 / 系统通知会把 48h 超时重置掉。
+    if candidate_schema and role == SenderRole.CANDIDATE:
+        try:
+            async with AsyncSessionFactory() as session:
+                async with session.begin():
+                    touched = await CandidateStatusHistoryRepo(session).touch_last_email(
+                        candidate_schema.id, received_at=db_now()
+                    )
+            if not touched:
+                logger.info(
+                    "[notify] 无活跃链记录，跳过更新时间 | candidate_id=%s",
+                    candidate_schema.id,
+                )
+        except Exception:
+            logger.exception(
+                "[notify] 更新最后邮件时间失败 | candidate_id=%s", candidate_schema.id
+            )
 
     # ---- L2 意图分类 ----
     result = await classify_intent(
@@ -176,16 +214,26 @@ async def _resume_candidate_graph(
         )
         return
 
-    thread_id = candidate_schema.email
-    if not await _waiting_reply(thread_id):
-        logger.info("无有效等待回复 checkpoint，不恢复图 | thread_id=%s", thread_id)
+    thread_id = thread_id_of(candidate_schema.id)
+    # 复用模块级编译图，避免每次恢复都重新编译
+    candidate_graph = _get_graph()
+
+    # 身份校验：只 resume「等待候选人回复」这个中断点。
+    # 只看 ``next`` 非空不够——若 thread 已被消费过（重复处理同一封邮件）或状态异常，
+    # ``resume`` 会让图**从头重跑**，state 里的 skip_scoring 残留会再发一次邀请邮件
+    # （实测：候选人收到「邀请」+「时段不可用」两封）。
+    snapshot = await candidate_graph.aget_state({"configurable": {"thread_id": thread_id}})
+    if not is_waiting_on(snapshot.interrupts, EMAIL_REPLY_INTERRUPT):
+        logger.info(
+            "[notify] 中断点不是等待候选人回复，不恢复图 | candidate_id=%s | thread_id=%s",
+            candidate_schema.id, thread_id,
+        )
         return
 
     if not settings.GRAPH_OPEN:
         logger.info("GRAPH_OPEN=false，仅记录不执行 | thread_id=%s", thread_id)
         return
 
-    candidate_graph = build_candidate_graph(get_checkpointer())
     from app.core.limiters import task_slot
     from app.service.candidate_status_ser import mark_candidate_error
 
@@ -262,11 +310,29 @@ async def _notify_hr(email: ParsedEmail, result: MailIntentResult) -> None:
 
 
 async def _enqueue_human_review(email: ParsedEmail, result: MailIntentResult) -> None:
-    """低置信 / 歧义：不 resume、不自动回，记日志待人工复核。
-    TODO: 接入实际通知（钉钉工作通知 / 邮件），可复用
-    """
+    """低置信 / 歧义：不 resume、不自动回，**落库**等人工复核。
 
+    复核人在「候选人管理 → 意图复核」里确认意图并执行动作
+    （见 ``app/service/mail_review_ser.py``）。
+
+    落库失败只记日志、不影响邮件轮询：这封邮件最坏就是没人复核，
+    不该让整轮 poll 崩掉。
+    """
     logger.warning(
         "[human_review] uid=%s | intent=%s | conf=%.2f | reason=%s",
         email.uid, result.intent.value, result.confidence, result.reason,
     )
+    try:
+        from app.service.mail_review_ser import enqueue_review
+
+        async with AsyncSessionFactory() as session:
+            async with session.begin():
+                _, created = await enqueue_review(session, email, result)
+        if created:
+            logger.info(
+                "[human_review] 已落库待复核 | message_id=%s", email.message_id
+            )
+    except Exception:
+        logger.exception(
+            "[human_review] 落库失败（不影响轮询） | message_id=%s", email.message_id
+        )

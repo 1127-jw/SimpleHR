@@ -81,17 +81,35 @@ def test_production_graph_wires_manual_gate():
     scoring_targets = {
         e.target for e in compiled.get_graph().edges if e.source == "scoring"
     }
-    assert scoring_targets == {"manual_decision", "rejected", "error"}
+    # email_invite：skip_scoring=True 时直达邀请（见 §3.4）
+    assert scoring_targets == {"manual_decision", "email_invite", "rejected", "error"}
 
     gate_targets = {
         e.target for e in compiled.get_graph().edges if e.source == "manual_decision"
     }
-    assert gate_targets == {"email_invite", "rejected", "error"}
+    assert gate_targets == {"email_invite", "rejected", "archive", "error"}
     assert all(
         e.conditional
         for e in compiled.get_graph().edges
         if e.source == "manual_decision"
     )
+
+
+def test_terminal_nodes_are_wired_through_archive_and_settle():
+    """所有终态都必须经过收尾节点——否则链表里不会有终止记录。
+
+    ``confirm`` → ``settle``（结算，保留「待面试」）；
+    其余终态 → ``archive``（写 archived_at）。
+    """
+    compiled = graph_mod.build_candidate_graph(checkpointer=InMemorySaver())
+    edges = compiled.get_graph().edges
+
+    assert {e.target for e in edges if e.source == "confirm"} == {"settle"}
+    for node in ("rejected", "refused", "negotiation_expired", "error"):
+        assert {e.target for e in edges if e.source == node} == {"archive"}
+
+    direct_end = {e.source for e in edges if e.target == "__end__"}
+    assert direct_end == {"archive", "settle"}, "只有收尾节点能直连 END"
 
 
 # ---------------- 图层面的挂起 / 唤醒 ----------------
@@ -139,7 +157,7 @@ async def test_gate_pauses_then_approves(monkeypatch):
 
     assert reached == ["email_invite"]
     assert status_calls[0][1].value == "待人工确认", "挂起前要把状态置为待人工确认"
-    assert status_calls[-1][1].value == "AI筛选成功", "确认后要回到 AI 筛选成功"
+    assert status_calls[-1][1].value == "面试时间协商中", "确认后直接进入协商"
 
 
 async def test_gate_reject_skips_invite(monkeypatch):
@@ -306,18 +324,18 @@ async def test_timeout_sweep_does_not_open_the_manual_gate(monkeypatch, fake_red
     monkeypatch.setattr(timeout_tasks, "AsyncSessionFactory", lambda: _Session())
 
     @dataclass
-    class _C:
-        id: str = "cand-001"
-        email: str = "c@example.com"
+    class _Row:
+        candidate_id: str = "cand-001"
+        candidate_email: str = "c@example.com"
 
-    class _Repo:
+    class _HistoryRepo:
         def __init__(self, session=None):
             pass
 
-        async def list_stale_email_waiters(self, cutoff, limit):
-            return [_C()]
+        async def list_stale_negotiating(self, cutoff, limit=200):
+            return [_Row()]
 
-    monkeypatch.setattr(timeout_tasks, "CandidateRepo", _Repo)
+    monkeypatch.setattr(timeout_tasks, "CandidateStatusHistoryRepo", _HistoryRepo)
 
     stub = _StubGraph(interrupts=[Interrupt(value={"node": MANUAL_DECISION_INTERRUPT})])
     monkeypatch.setattr(timeout_tasks, "get_checkpointer", lambda *a, **k: object())
@@ -338,18 +356,18 @@ async def test_timeout_sweep_still_opens_email_reply(monkeypatch, fake_redis):
     monkeypatch.setattr(timeout_tasks, "AsyncSessionFactory", lambda: _Session())
 
     @dataclass
-    class _C:
-        id: str = "cand-001"
-        email: str = "c@example.com"
+    class _Row:
+        candidate_id: str = "cand-001"
+        candidate_email: str = "c@example.com"
 
-    class _Repo:
+    class _HistoryRepo:
         def __init__(self, session=None):
             pass
 
-        async def list_stale_email_waiters(self, cutoff, limit):
-            return [_C()]
+        async def list_stale_negotiating(self, cutoff, limit=200):
+            return [_Row()]
 
-    monkeypatch.setattr(timeout_tasks, "CandidateRepo", _Repo)
+    monkeypatch.setattr(timeout_tasks, "CandidateStatusHistoryRepo", _HistoryRepo)
 
     stub = _StubGraph(interrupts=[Interrupt(value=EMAIL_REPLY_INTERRUPT)])
     monkeypatch.setattr(timeout_tasks, "get_checkpointer", lambda *a, **k: object())

@@ -15,10 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
+from app.models.candidate import CandidateStatusEnum
 from app.models.mail_submission import (
     MailResumeSubmissionModel,
     MailSubmissionStatusEnum,
 )
+from app.repository.candidate_history_repo import CandidateStatusHistoryRepo
 from app.repository.mail_submission_repo import MailSubmissionRepo
 from app.repository.resume_repo import CandidateRepo, ResumeRepo
 from app.schemas.candidate_schema import CandidateSchema
@@ -84,6 +86,16 @@ async def confirm_mail_submission(
         stored_name = await _store_resume_file(sub.attachment_paths[0])
         info = sub.parsed_info or {}
 
+        # 建图查重：同一邮箱已有**活跃**流程时不允许重复建。
+        # 只有归档（next_id='-1'）才放行；已结算（'-2'，待面试）和进行中都会挡下。
+        active = await CandidateStatusHistoryRepo(session).get_active_by_email(
+            sub.from_address
+        )
+        if active is not None:
+            raise ValueError(
+                f"邮箱 {sub.from_address} 已有进行中的流程，不可重复创建"
+            )
+
         resume = await ResumeRepo(session).create_resume(
             file_path=stored_name, uploader_id=current_user.id
         )
@@ -108,6 +120,15 @@ async def confirm_mail_submission(
             position_id=position_id, resume_id=resume.id,
             reviewer_id=current_user.id,
             reviewed_at=db_now(),
+        )
+
+        # 链头：与 create_candidate_ser 一致，否则建图查重会认为该邮箱「无记录」
+        await CandidateStatusHistoryRepo(session).record_change(
+            candidate_model.id,
+            to_status=CandidateStatusEnum.APPLICATION.value,
+            candidate_email=candidate_model.email,
+            position_id=position_id,
+            position_title=candidate_model.position.title,
         )
 
     # 会话内转 Schema（create_candidate 已带 eager 关联）

@@ -193,7 +193,7 @@ simplejob/
 │   ├── ocr_service.py           # PaddleOCR 云端 API 封装
 │   ├── PDFser.py                # Word → PDF 转换
 │   └── available_time.py        # 空闲时段计算算法
-├── tests/                       # pytest 测试套件（251 个用例）
+├── tests/                       # pytest 测试套件（276 个用例）
 ├── scripts/                     # 运维脚本
 │   ├── backup.sh                # 数据库备份
 │   ├── deploy.sh                # 部署脚本
@@ -315,7 +315,7 @@ uv run uvicorn app.main:app --reload
 ### 6. 运行测试
 
 ```bash
-uv run pytest          # 251 个用例，约 8 秒
+uv run pytest          # 276 个用例，约 8 秒
 ```
 
 测试不依赖真实数据库 / Redis / 网络：用内存版 Redis 与纯函数覆盖路由、
@@ -542,6 +542,7 @@ logger.info(...) → QueueHandler → 队列 → 监听进程/线程 → 文件
 tests/
 ├── conftest.py                # 夹具：内存 Redis（含 Lua 语义）/ 临时工作目录
 ├── test_auth_tokens.py        # Token 生命周期（10）
+├── test_candidate_history.py     # 状态变更链 / thread_id 隔离 / 收尾节点 / 邀请邮件（14）
 ├── test_bugfixes_1117.py      # 11-17 缺陷修复回归（50）
 ├── test_candidate_ownership.py# 候选人接口归属校验（6）
 ├── test_change_password.py    # 修改密码（22）
@@ -554,13 +555,16 @@ tests/
 ├── test_intent.py             # 意图识别（9）
 ├── test_llms_lazy.py          # LLM 客户端懒加载（3）
 ├── test_logging_routing.py    # 日志分流（9）
+├── test_mail_review.py          # 意图复核（7）
+├── test_manual_decision.py    # 人工闸门 / 中断点身份（17）
 ├── test_negotiation_loop.py   # 协商主链路（8）
+├── test_notify_resume_guard.py # 恢复前校验中断点（3）
 ├── test_rate_limit.py         # 滑动窗口限流（7）
 ├── test_scheduler.py          # 后台调度与重试（32）
 └── test_time_policy.py        # 时区策略（16）
 ```
 
-**共 251 个用例**，运行约 8 秒，不依赖真实数据库 / Redis / 网络。
+**共 276 个用例**，运行约 8 秒，不依赖真实数据库 / Redis / 网络。
 
 ---
 

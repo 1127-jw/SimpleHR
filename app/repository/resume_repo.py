@@ -11,6 +11,7 @@ from app.models.candidate import CandidateStatusEnum
 from app.models.user import UserModel
 from sqlalchemy import func, and_
 from app.models.InterviewModel import InterviewModel
+from app.models.candidate_status_history import CandidateStatusHistoryModel
 
 
 def candidate_eager_options():
@@ -97,6 +98,15 @@ class CandidateRepo(BaseRepo):
             )
         )
 
+        # 删除状态变更链：候选人没了，链记录留着只会让
+        # 「建图查重」误判该邮箱仍有历史（虽然归档后本就允许重建，
+        # 但留着脏数据会让审计与统计失真）。
+        await self.session.execute(
+            delete(CandidateStatusHistoryModel).where(
+                CandidateStatusHistoryModel.candidate_id == candidate_id
+            )
+        )
+
         # 删除候选人
         await self.session.delete(candidate)
         return True
@@ -131,6 +141,19 @@ class CandidateRepo(BaseRepo):
             .where(CandidateModel.email == email)
             .options(*candidate_eager_options())
         )
+
+    async def list_by_email(self, email: str) -> list[CandidateModel]:
+        """按邮箱取**全部**记录（同一候选人多次投递会有多条）。
+
+        ``get_by_email`` 只返回任意一条，同邮箱多记录时会选错——恢复流程
+        （``notify``）必须挑「当前活跃」的那条。
+        """
+        return list(await self.session.scalars(
+            select(CandidateModel)
+            .where(CandidateModel.email == email)
+            .order_by(CandidateModel.created_at.desc())
+            .options(*candidate_eager_options())
+        ))
 
     async def _visible_stmt(self, current_user: UserModel):
         """候选人可见性条件。
@@ -247,6 +270,21 @@ class CandidateAIScoreRepo(BaseRepo):
         candidate_score = CandidateAIScoreModel(**candidate_score_dict, candidate_id=candidate_id)
         self.session.add(candidate_score)
         return candidate_score
+
+    async def upsert_candidate_score(self, candidate_id: str, candidate_score_dict: dict):
+        """写入评分，**已有则更新**（``candidate_id`` 上有唯一索引）。
+
+        为什么需要 upsert：人工重试时图可能再次经过 scoring 节点，
+        直接 insert 会撞 ``ix_candidate_ai_scores_candidate_id`` 并让整个流程落进 error。
+        """
+        existing = await self.get_by_candidate_id(candidate_id)
+        if existing is None:
+            row = CandidateAIScoreModel(**candidate_score_dict, candidate_id=candidate_id)
+            self.session.add(row)
+            return row
+        for key, value in candidate_score_dict.items():
+            setattr(existing, key, value)
+        return existing
 
     async def get_by_candidate_id(self, candidate_id: str):
         return await self.session.scalar(select(CandidateAIScoreModel).where(CandidateAIScoreModel.candidate_id==candidate_id))

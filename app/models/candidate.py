@@ -41,6 +41,8 @@ class CandidateStatusEnum(StrEnum):
     PROCESSING_ERROR = "处理异常"
     # 13. 待人工确认（AI 评分通过后、发送邀请邮件前的人工闸门）
     PENDING_MANUAL_DECISION = "待人工确认"
+    # 14. 面试时间协商中（已发出邀请、等候选人回复或改约）
+    NEGOTIATING = "面试时间协商中"
 
 
 class GenderEnum(StrEnum):
@@ -95,6 +97,11 @@ class CandidateModel(BaseModel):
     # 面试邀请邮件发送时间：用于「等待候选人回复」的超时巡检
     # （索引见 __table_args__ 的部分索引 ix_candidates_email_waiting）
     email_invite_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # 归档时间：图流程终止（淘汰/拒绝/异常收尾）时写入，NULL 表示未归档。
+    # 刻意**不**把 status 覆盖成「已归档」——细分终态要留给 HR 事后标注，
+    # 旧的按状态筛选/统计查询因此一行都不用改。详见
+    # docs/candidate_status_history_design.md
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
 
     position_id: Mapped[str] = mapped_column(ForeignKey("positions.id"))
     resume_id: Mapped[str] = mapped_column(ForeignKey("resumes.id"))

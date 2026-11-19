@@ -96,6 +96,7 @@ async def create_candidate(
         candidate=candidate_schema,
         position=position_schema,
         interviewer=interviewer_schema,
+        skip_scoring=candidate_data.skip_scoring,
     )
     return ResponseSchema()
 
@@ -201,9 +202,12 @@ async def download_resume_file(
 class ManualDecisionSchema(BaseModel):
     """人工闸门决定。"""
 
-    decision: Literal["approve", "reject"] = Field(
+    decision: Literal["approve", "reject", "archive"] = Field(
         ...,
-        description="approve=发送面试邀请邮件并继续；reject=不发送，淘汰",
+        description=(
+            "approve=发送面试邀请邮件并继续；reject=不发送，淘汰；"
+            "archive=直接归档收尾（流程终止，状态保持细分值）"
+        ),
     )
 
 

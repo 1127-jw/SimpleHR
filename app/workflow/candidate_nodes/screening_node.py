@@ -17,6 +17,12 @@ async def screening_node(state: CandidateRecruitmentState) -> dict:
 
     logger.info("[screening] start | candidate_id=%s", cid)
 
+    # 跳过筛选：创建候选人时 HR 勾了「跳过筛选直达邀请」，
+    # 硬性条件也不查（HR 已经认可这个人）。路由由 _route_after_scoring 统一处理。
+    if state.get("skip_scoring"):
+        logger.info("[screening] skip_scoring=True，跳过 | candidate_id=%s", cid)
+        return {"screening_passed": True, "current_stage": "scoring"}
+
     # 规则 1：最低工作年限
     if candidate.work_year < position.work_year:
         logger.info(

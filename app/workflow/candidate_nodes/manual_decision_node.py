@@ -11,9 +11,11 @@ from langgraph.types import interrupt
 from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
 from app.models.candidate import CandidateStatusEnum
+from app.repository.candidate_history_repo import CandidateStatusHistoryRepo
 from app.repository.resume_repo import CandidateRepo
 from app.workflow.candidate_state import (
     MANUAL_DECISION_APPROVE,
+    MANUAL_DECISION_ARCHIVE,
     MANUAL_DECISION_INTERRUPT,
     MANUAL_DECISION_REJECT,
     CandidateRecruitmentState,
@@ -24,12 +26,27 @@ logger = logging.getLogger(settings.NODE_LOGGER_NAME)
 
 
 async def _set_status(candidate_id: str, status: CandidateStatusEnum) -> None:
-    """更新候选人状态（闸门自身不抛异常：状态写失败也要让人工作业继续）。"""
+    """更新候选人状态，并同步写状态变更链。
+
+    闸门自身不抛异常：状态写失败也要让人工作业继续。
+
+    注意：LangGraph 在 resume 时会从头重跑本节点，这里会执行两次。
+    所以写链前先判断「链上最新记录是不是已经是这个状态」，避免插重复记录。
+    """
     try:
         async with AsyncSessionFactory() as session:
             async with session.begin():
                 await CandidateRepo(session).update_candidate_status(
                     candidate_id=candidate_id, status=status,
+                )
+                history = CandidateStatusHistoryRepo(session)
+                active = await history.get_active(candidate_id)
+                if active is not None and active.to_status == status.value:
+                    return
+                await history.record_change(
+                    candidate_id,
+                    to_status=status.value,
+                    from_status=active.to_status if active else None,
                 )
     except Exception:  # noqa: BLE001 - 闸门不能因为状态写失败而卡死
         logger.error(
@@ -66,11 +83,21 @@ async def manual_decision_node(state: CandidateRecruitmentState) -> dict:
 
     if decision == MANUAL_DECISION_APPROVE:
         logger.info("[manual_decision] 人工确认发送 | candidate_id=%s", cid)
-        # 回到「AI 筛选成功」，让后续 confirm 正常落「待面试」
-        await _set_status(cid, CandidateStatusEnum.AI_FILTER_PASSED)
+        # 直接进入协商：发邀请邮件前状态就是「面试时间协商中」。
+        # 不再经过「AI筛选成功」——评分达标时状态已经是「待人工确认」了。
+        await _set_status(cid, CandidateStatusEnum.NEGOTIATING)
         return {
             "manual_decision": MANUAL_DECISION_APPROVE,
             "current_stage": "email_invite",
+        }
+
+    if decision == MANUAL_DECISION_ARCHIVE:
+        # HR 判定这条流程不用再走：直接归档收尾（写 archived_at + 链尾 '-1'）。
+        # 状态保持「待人工确认」，细分值照样可读，旧的筛选/统计查询不受影响。
+        logger.info("[manual_decision] 人工归档 | candidate_id=%s", cid)
+        return {
+            "manual_decision": MANUAL_DECISION_ARCHIVE,
+            "current_stage": "archive",
         }
 
     logger.info(

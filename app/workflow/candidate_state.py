@@ -25,10 +25,11 @@ REPLY_TIME_AVAILABLE: str = "SYSTEM_TIME_AVAILABLE"
 REPLY_SLOT_TAKEN: str = "SYSTEM_SLOT_TAKEN"
 
 # === 人工闸门（manual_decision）的回复值 ===
-# 由前端「发送邮件 / 不发送」两个动作传入 Command(resume=...)，
-# 节点据此决定继续发邀请还是淘汰。
+# 由前端「发送邮件 / 不发送 / 归档」三个动作传入 Command(resume=...)，
+# 节点据此决定继续发邀请、淘汰，还是直接归档收尾。
 MANUAL_DECISION_APPROVE: str = "approve"
 MANUAL_DECISION_REJECT: str = "reject"
+MANUAL_DECISION_ARCHIVE: str = "archive"
 
 # === 中断点标记 ===
 # ``interrupt(value)`` 的 ``value`` 会原样出现在 ``StateSnapshot.interrupts`` 里。
@@ -38,6 +39,19 @@ MANUAL_DECISION_REJECT: str = "reject"
 # 候选人当场被判成「不发送」并淘汰。
 EMAIL_REPLY_INTERRUPT: str = "candidate_email_reply"
 MANUAL_DECISION_INTERRUPT: str = "manual_decision"
+
+
+def thread_id_of(candidate_id: str) -> str:
+    """检查点 ``thread_id``：**按候选人记录隔离，不用邮箱**。
+
+    同一候选人多次投递会产生多条记录，而邮箱只有一份；用邮箱当 thread_id 时，
+    超时巡检会用「另一条记录」的 email 去 resume，实际唤醒的是别人的中断点。
+    实测事故：旧记录的超时唤醒了新建记录的闸门。
+
+    归档 / 结算后重新发起仍是同一个 thread（``Command(goto=...)`` 可以重新进入
+    已结束的流程，不需要新图），只是链表会追加一条新记录。
+    """
+    return f"candidate:{candidate_id}"
 
 
 def is_waiting_on(interrupts, marker: str) -> bool:
@@ -106,7 +120,8 @@ class CandidateRecruitmentState(TypedDict):
         Literal[
             "screening", "scoring", "manual_decision", "email_invite",
             "check_availability", "email_reply", "negotiation", "confirmed",
-            "rejected", "refused", "negotiation_expired", "error"
+            "rejected", "refused", "negotiation_expired", "archived",
+            "settled", "error"
         ],
         assign_state_property
     ]

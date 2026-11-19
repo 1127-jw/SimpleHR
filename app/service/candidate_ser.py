@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 from pathlib import Path
 from app.repository.resume_repo import ResumeRepo, CandidateRepo
+from app.repository.candidate_history_repo import CandidateStatusHistoryRepo
 from app.models.user import UserModel
 from app.models.candidate import ResumeModel
 from app.schemas.candidate_schema import TaskInfoSchema, CandidateCreateSchema, CandidateSchema
@@ -106,13 +107,37 @@ async def create_candidate_ser(
         candidate_data:CandidateCreateSchema
 ):
     async with session.begin():
-        candidate_dict = candidate_data.model_dump()
+        # 建图查重：同邮箱已有活跃流程就不允许重复创建。
+        # 归档（'-1'）不在活跃集合里，所以归档后仍可用同一邮箱再投递。
+        active = await CandidateStatusHistoryRepo(session).get_active_by_email(
+            candidate_data.email
+        )
+        if active is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"邮箱 {candidate_data.email} 已有进行中的流程，不能重复创建",
+            )
+
+        # skip_scoring 是流程控制参数，不是 CandidateModel 的字段
+        candidate_dict = candidate_data.model_dump(exclude={"skip_scoring"})
         candidate_dict['creator_id'] = current_user.id
         candidate_repo = CandidateRepo(session=session)
         candidate = await candidate_repo.create_candidate(candidate_dict)
         candidate_schema = CandidateSchema.model_validate(candidate)
         position_schema = PositionSchema.model_validate(candidate.position)
         interviewer_schema = UserSH.model_validate(candidate.position.creator)
+
+        # 链头：创建即「已投递」，后续每次状态变更都往这条链上追加。
+        # 没有链头的话，建图查重会认为该邮箱「无记录」而放过重复投递。
+        from app.models.candidate import CandidateStatusEnum
+
+        await CandidateStatusHistoryRepo(session).record_change(
+            candidate_schema.id,
+            to_status=CandidateStatusEnum.APPLICATION.value,
+            candidate_email=candidate_schema.email,
+            position_id=position_schema.id,
+            position_title=position_schema.title,
+        )
 
     return candidate_schema, position_schema, interviewer_schema
 

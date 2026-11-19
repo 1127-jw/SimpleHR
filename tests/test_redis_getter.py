@@ -79,11 +79,11 @@ async def test_sweep_works_with_real_get_redis(monkeypatch, fake_redis):
         def __init__(self, session=None):
             pass
 
-        async def list_stale_email_waiters(self, cutoff, limit):
+        async def list_stale_negotiating(self, cutoff, limit=200):
             return []
 
     monkeypatch.setattr(timeout_tasks, "AsyncSessionFactory", lambda: _Session())
-    monkeypatch.setattr(timeout_tasks, "CandidateRepo", _Repo)
+    monkeypatch.setattr(timeout_tasks, "CandidateStatusHistoryRepo", _Repo)
 
     # 刻意不碰 timeout_tasks.get_redis —— 走真实 getter
     assert await timeout_tasks.sweep_stale_email_replies() == 0
