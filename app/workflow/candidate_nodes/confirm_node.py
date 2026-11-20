@@ -27,13 +27,6 @@ async def confirm_node(state: CandidateRecruitmentState) -> dict:
     """
     确认最终面试时间。
     包含：发确认邮件 + 创建钉钉日程 + 创建面试记录 + 更新候选人状态。
-
-    顺序有意设计为「先外部、后本地」：钉钉日程是整个流程里最容易失败的一步
-    （token 过期、接口限流、网络抖动），它一旦失败，异常会作为
-    ``DingTalkServiceError`` 抛出图外。若先写库再排日程，就会留下
-    「候选人已是待面试、面试记录也有，但没有日程也没有确认邮件」的脏状态，
-    人工重试也无从判断该补哪一步。现在改成：日程成功后才落库，
-    外部失败时库保持原样，流程停在 error 等人工处理。
     """
     position = state['position']
     candidate = state["candidate"]

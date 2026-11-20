@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.workflow import candidate_graph as graph_mod
 from app.workflow.candidate_graph import (
     _route_after_scoring,
@@ -215,3 +217,151 @@ async def test_invite_email_lists_up_to_three_slots(monkeypatch):
     assert "2026-11-21 10:00" in text
     assert "2026-11-22" not in text, "最多列 3 段"
     assert "第一个时间段" in text
+
+
+# ---------------- 时段不可用时的备选时段 ----------------
+
+async def test_alternative_slots_formatted_and_capped(monkeypatch):
+    """时段不可用时的回信要带备选时段，且最多 3 段。"""
+    from datetime import datetime, timedelta, timezone
+
+    from app.workflow.candidate_nodes import check_availability_node as cav
+
+    tz = timezone(timedelta(hours=8))
+    slots = [
+        (datetime(2026, 11, 20, 9, 0, tzinfo=tz), datetime(2026, 11, 20, 10, 0, tzinfo=tz)),
+        (datetime(2026, 11, 21, 10, 0, tzinfo=tz), datetime(2026, 11, 21, 11, 0, tzinfo=tz)),
+        (datetime(2026, 11, 22, 10, 0, tzinfo=tz), datetime(2026, 11, 22, 11, 0, tzinfo=tz)),
+        (datetime(2026, 11, 23, 10, 0, tzinfo=tz), datetime(2026, 11, 23, 11, 0, tzinfo=tz)),
+    ]
+    monkeypatch.setattr(cav, "get_user_available_slots", lambda *a, **k: _coro(slots))
+
+    text = await cav._load_alternative_slots(
+        {"candidate": SimpleNamespace(id="c1"), "interviewer": SimpleNamespace(id="u1")}
+    )
+    assert "1. 2026-11-20 09:00 - 2026-11-20 10:00" in text
+    assert "2026-11-23" not in text, "最多 3 段"
+
+
+async def test_alternative_slots_empty_on_failure(monkeypatch):
+    """查不到可用时段时返回空串，不影响回信（best-effort）。"""
+    from app.workflow.candidate_nodes import check_availability_node as cav
+
+    def _boom(*a, **k):
+        raise RuntimeError("dingtalk down")
+
+    monkeypatch.setattr(cav, "get_user_available_slots", _boom)
+    text = await cav._load_alternative_slots(
+        {"candidate": SimpleNamespace(id="c1"), "interviewer": SimpleNamespace(id="u1")}
+    )
+    assert text == ""
+
+
+# ---------------- 终态节点单独写链 ----------------
+
+async def test_rejected_node_records_chain(monkeypatch):
+    """淘汰节点要自己写状态变更链，不能只靠 archive_node 补终态。"""
+    from types import SimpleNamespace as NS
+
+    from app.workflow.candidate_nodes import rejected_node as mod
+
+    captured = {}
+
+    async def _fake(candidate, position, to_status, **kw):
+        captured["id"] = candidate.id
+        captured["status"] = getattr(to_status, "value", to_status)
+
+    monkeypatch.setattr(mod, "record_node_transition", _fake)
+
+    await mod.rejected_node(
+        {"candidate": NS(id="c1", status="已投递"), "position": NS(id="p1")}
+    )
+    assert captured == {"id": "c1", "status": "AI筛选失败"}
+
+
+async def test_refused_node_records_chain(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    from app.workflow.candidate_nodes import refused_node as mod
+
+    captured = {}
+
+    async def _fake(candidate, position, to_status, **kw):
+        captured["status"] = getattr(to_status, "value", to_status)
+
+    monkeypatch.setattr(mod, "record_node_transition", _fake)
+    await mod.refused_node(
+        {"candidate": NS(id="c1", status="面试时间协商中"), "position": NS(id="p1")}
+    )
+    assert captured["status"] == "拒绝面试"
+
+
+async def test_screening_failure_records_chain(monkeypatch):
+    """筛选未通过也要留痕，链里能看到「为什么没过」。"""
+    from types import SimpleNamespace as NS
+
+    from app.workflow.candidate_nodes import screening_node as mod
+
+    captured = {}
+
+    async def _fake(candidate, position, to_status, **kw):
+        captured["status"] = getattr(to_status, "value", to_status)
+
+    monkeypatch.setattr(mod, "record_node_transition", _fake)
+
+    candidate = NS(id="c1", work_year=1, email="a@qq.com")
+    position = NS(id="p1", work_year=5)
+    result = await mod.screening_node(
+        {"candidate": candidate, "position": position}
+    )
+    assert result["screening_passed"] is False
+    assert captured["status"] == "AI筛选失败"
+
+
+# ---------------- skip_scoring 权限 ----------------
+
+async def test_skip_scoring_forbidden_for_non_hr(monkeypatch):
+    """跳过 AI 评估只允许 HR / 超管，普通员工传了也拒绝。"""
+    from types import SimpleNamespace as NS
+
+    from fastapi import HTTPException
+
+    import importlib
+
+    router_mod = importlib.import_module("app.routers.candidate_router")
+
+    async def _fake_ser(*a, **k):
+        return NS(id="c1"), NS(id="p1"), NS(id="u1")
+
+    monkeypatch.setattr(router_mod, "create_candidate_ser", _fake_ser)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await router_mod.create_candidate(
+            candidate_data=NS(skip_scoring=True),
+            session=None,
+            current_user=NS(id="u1", is_hr=False, is_superuser=False),
+            background_tasks=NS(add_task=lambda *a, **k: None),
+        )
+    assert excinfo.value.status_code == 403
+
+
+async def test_skip_scoring_allowed_for_hr(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    import importlib
+
+    router_mod = importlib.import_module("app.routers.candidate_router")
+
+    monkeypatch.setattr(
+        router_mod, "create_candidate_ser",
+        lambda *a, **k: _coro((NS(id="c1"), NS(id="p1"), NS(id="u1"))),
+    )
+    scheduled = []
+    result = await router_mod.create_candidate(
+        candidate_data=NS(skip_scoring=True),
+        session=None,
+        current_user=NS(id="u1", is_hr=True, is_superuser=False),
+        background_tasks=NS(add_task=lambda *a, **k: scheduled.append(a)),
+    )
+    assert result is not None
+    assert scheduled, "HR 勾了跳过筛选应正常起图"

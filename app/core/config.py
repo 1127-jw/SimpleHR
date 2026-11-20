@@ -153,6 +153,17 @@ class Settings(BaseSettings):
         default="", description="匹配不到职位时的默认职位，留空则转人工"
     )
 
+    # ---------- LangGraph 检查点连接池 ----------
+    # 注意：AsyncPostgresSaver 内部有 asyncio.Lock，checkpoint 读写是串行的，
+    # 因此池的并发能力用不上；这里限制大小只为节省数据库连接资源，
+    # 同时保留 1 条冗余连接用于坏连接替换 / 健康检查。
+    CHECKPOINT_DB_MIN_SIZE: int = Field(
+        default=1, ge=1, description="检查点连接池最小连接数"
+    )
+    CHECKPOINT_DB_MAX_SIZE: int = Field(
+        default=2, ge=1, description="检查点连接池最大连接数（串行场景下 2 足够）"
+    )
+
     # ---------- LLM 调用限流 ----------
     LLM_MAX_CONCURRENCY: int = Field(
         default=20, ge=1,

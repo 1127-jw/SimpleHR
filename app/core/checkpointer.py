@@ -2,22 +2,28 @@
 
 设计说明
 --------
-检查点存储是 **进程级单例**：应用启动时建立一次连接并 ``setup()``，
+检查点存储是 **进程级单例**：应用启动时建立一次连接池并 ``setup()``，
 整个进程内的所有请求 / 后台任务 / 邮件机器人共用同一实例。
 
-为什么不是「每次调用建一个」：
-``AsyncPostgresSaver.from_conn_string`` 是一个 ``asynccontextmanager``，
-每调用一次就会新建一条 Postgres 连接，并且 ``setup()`` 会再执行一遍
-建表 / 迁移 DDL。原实现每次 ``ainvoke`` 都进出一次上下文，连接反复
-创建销毁，既浪费又放大了数据库压力。
+为什么用连接池而不是单连接：
+psycopg 的 ``AsyncConnection`` **不是协程安全的**（同一时刻只能执行一个操作）。
+虽然 ``AsyncPostgresSaver`` 内部用 ``asyncio.Lock`` 串行化了所有 DB 操作
+（见 ``_cursor()`` 中的 ``async with self.lock``），单连接也不会出错，
+但连接池能带来：
 
-单例后：每进程恒定 1 条连接，``setup()`` 只执行一次。
+* **连接健康检查 / 自动重连**：单连接断开后不会自愈，池会替换坏连接；
+* **并发扩展能力**：若未来 LangGraph 弱化锁，池可支撑真并发；
+* **资源可控**：``min_size`` / ``max_size`` 限制同时占用的连接数。
+
+注意：``AsyncPostgresSaver`` 实例仍然持有 ``asyncio.Lock``，
+所以当前 checkpoint 读写实际仍是串行的；池主要提升的是连接可靠性与可扩展性。
 """
 import asyncio
 
-from langgraph.checkpoint.postgres.aio import AsyncConnection, AsyncPostgresSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
 from app.core.config import get_settings
 
@@ -35,7 +41,7 @@ _ALLOWED_MSGPACK_MODULES = [
     ("app.schemas.agent_schema", "AgentCandidateScoreSchema"),
 ]
 
-_connection: AsyncConnection | None = None
+_pool: AsyncConnectionPool | None = None
 _saver: AsyncPostgresSaver | None = None
 _init_lock = asyncio.Lock()
 
@@ -47,12 +53,28 @@ def _build_serde() -> JsonPlusSerializer:
     )
 
 
+def _build_pool(conninfo: str) -> AsyncConnectionPool:
+    """构造检查点专用连接池（延迟打开，由 init 显式 open）。"""
+    settings = get_settings()
+    return AsyncConnectionPool(
+        conninfo=conninfo,
+        min_size=settings.CHECKPOINT_DB_MIN_SIZE,
+        max_size=settings.CHECKPOINT_DB_MAX_SIZE,
+        kwargs={
+            "autocommit": True,
+            "prepare_threshold": 0,
+            "row_factory": dict_row,
+        },
+        open=False,
+    )
+
+
 async def init_checkpointer() -> AsyncPostgresSaver:
     """进程启动时调用一次，建立全局检查点存储。幂等。
 
     必须在事件循环内调用（FastAPI lifespan）。
     """
-    global _connection, _saver
+    global _pool, _saver
 
     if _saver is not None:
         return _saver
@@ -60,13 +82,13 @@ async def init_checkpointer() -> AsyncPostgresSaver:
     async with _init_lock:
         settings = get_settings()
         pg_url = settings.database_url.replace("+psycopg", "")
-        conn = await AsyncConnection.connect(
-            pg_url, autocommit=True, prepare_threshold=0, row_factory=dict_row
-        )
-        saver = AsyncPostgresSaver(conn=conn, serde=_build_serde())
+
+        pool = _build_pool(pg_url)
+        await pool.open()
+        saver = AsyncPostgresSaver(conn=pool, serde=_build_serde())
         await saver.setup()
 
-        _connection = conn
+        _pool = pool
         _saver = saver
 
     return _saver
@@ -86,15 +108,15 @@ def get_checkpointer() -> AsyncPostgresSaver:
 
 
 async def close_checkpointer() -> None:
-    """进程退出时调用：释放底层连接。幂等。"""
-    global _connection, _saver
+    """进程退出时调用：关闭连接池。幂等。"""
+    global _pool, _saver
 
     _saver = None
-    conn = _connection
-    _connection = None
+    pool = _pool
+    _pool = None
 
-    if conn is not None:
+    if pool is not None:
         try:
-            await conn.close()
+            await pool.close()
         except Exception:  # noqa: BLE001 - 退出阶段兜底，不能因清理失败阻断关停
             pass

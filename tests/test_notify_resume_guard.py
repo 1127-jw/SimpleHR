@@ -52,6 +52,7 @@ async def test_resume_skipped_when_interrupt_is_not_email_reply(monkeypatch):
     )
 
     assert stub.resumed == [], "非「等待候选人回复」的中断点不能被 resume"
+    # 返回 False：调用方据此把这封邮件落进「意图复核」，而不是丢掉
 
 
 async def test_resume_proceeds_for_email_reply_interrupt(monkeypatch):

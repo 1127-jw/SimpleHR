@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
 from app.models.candidate import CandidateStatusEnum
 from app.repository.resume_repo import CandidateRepo
+from app.workflow.candidate_nodes.terminal_records import record_node_transition
 from app.workflow.candidate_state import CandidateRecruitmentState
 
 settings = get_settings()
@@ -49,6 +50,11 @@ async def error_node(state: CandidateRecruitmentState) -> dict:
                     candidate_id=cid,
                     error_message=f"[{error_stage}] {error_msg}",
                 )
+        # 状态变更链（与 status 同一语义；放在事务外避免 error_message 回滚影响）
+        await record_node_transition(
+            candidate, state.get("position"),
+            CandidateStatusEnum.PROCESSING_ERROR,
+        )
     except Exception as e:
         logger.critical(
             "[error_node] failed to update status | candidate_id=%s",

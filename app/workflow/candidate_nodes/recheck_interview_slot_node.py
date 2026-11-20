@@ -1,13 +1,4 @@
 """复核节点：确认时间后、创建日程前，再查一次面试官该时段是否仍空闲。
-
-为什么需要这道复核：协商可能持续好几天，期间面试官完全可能在这个时段
-排了别的日程（候选人看的是几天前的空闲快照）。若不复核就建日程，
-会出现「日程与面试官已有安排撞车」。
-
-* 仍空闲 → 继续走 ``confirm``（建日程 + 落库 + 发确认信）；
-* 已被占用 → **协商轮次归零** + 重新发邮件约时间，回到等待回复中断点。
-  轮次归零是必要的：否则候选人刚被「确认」过一次，
-  ``negotiation_round`` 可能已经接近上限，重新协商要从头给机会。
 """
 from __future__ import annotations
 
@@ -20,6 +11,7 @@ from app.core.exceptions import (
     InterviewSchedulingError,
 )
 from app.service.dingtalk_ser import get_user_available_slots
+from app.core.time import now_beijing
 from app.workflow.candidate_nodes.check_availability_node import (
     INTERVIEW_DURATION,
     resolve_interview_slot,
@@ -77,6 +69,21 @@ async def recheck_interview_slot_node(state: CandidateRecruitmentState) -> dict:
         "[recheck] start | candidate_id=%s | interviewer_id=%s | time=%s",
         cid, interviewer.id, proposed_dt,
     )
+
+    # 时段已经过去就不用再查钉钉了——面试官不可能回到过去。
+    # 协商拖得久（跨周末、跨假期）时，候选人确认的可能是个已经过去的时间。
+    now = now_beijing()
+    if proposed_dt <= now:
+        logger.info(
+            "[recheck] 时段已过去，按不可用处理 | candidate_id=%s | time=%s | now=%s",
+            cid, proposed_dt, now,
+        )
+        await _notify_slot_taken(candidate, proposed_dt)
+        return {
+            "candidate_email_reply": REPLY_SLOT_TAKEN,
+            "negotiation_round": 0,
+            "current_stage": "negotiation",
+        }
 
     try:
         available_slots = await get_user_available_slots(

@@ -51,6 +51,26 @@ if config.config_file_name is not None:
 # target_metadata = mymodel.Base.metadata
 target_metadata = Base.metadata
 
+# 不属于本项目模型的表：``--autogenerate`` 会把它们当成「库里有、模型里没有」，
+# 从而生成 **DROP TABLE** 语句。
+#
+# LangGraph 的 checkpoint 表由它自己管理（见 app/core/checkpointer.py），
+# 一旦被删等于清空所有流程检查点；``alembic_version`` 是 Alembic 自己的版本表。
+_EXCLUDED_TABLES = frozenset({
+    "checkpoints",
+    "checkpoint_blobs",
+    "checkpoint_writes",
+    "checkpoint_migrations",
+    "alembic_version",
+})
+
+
+def include_object(object, name, type_, reflected, compare_to):  # noqa: ANN001
+    """过滤掉非本项目的对象，只对 ``Base.metadata`` 里的表做自动比对。"""
+    if type_ == "table" and name in _EXCLUDED_TABLES:
+        return False
+    return True
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
@@ -73,6 +93,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -85,6 +106,7 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
+        include_object=include_object,
         # 每个迁移使用独立事务。
         #
         # PostgreSQL 16 及更早版本不允许在「同一事务」中使用 ALTER TYPE ... ADD VALUE

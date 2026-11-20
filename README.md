@@ -15,6 +15,9 @@
 | **人工通过/重试** | HR/管理员可将 `AI筛选失败`/`协商超时`/`处理异常` 的候选人手动触发重试，通过 `Command(goto="email_invite")` 重启协商流程 |
 | **超时自动巡检** | 定时扫描「等待候选人回复」超时的流程，自动推进到「协商超时」，无需人工介入 |
 | **邮件意图识别** | LLM 识别邮件意图（简历投递 / 面试回复），投递类邮件进入待确认台，避免自动建错人 |
+| **人工闸门** | 评分达标后先 `interrupt()` 暂停，由 HR 决定「发送邀请 / 淘汰 / 归档」，避免 AI 自动发信 |
+| **状态变更链** | 每次状态变更写入 `candidate_status_history`，用 `next_id` 串成时间链；`archived_at` 表示「图流程走完」，`next_id` 区分归档/结算 |
+| **建日程前复核** | 确认面试时间后、创建日程前再查一次该时段是否仍空闲，被占用则轮次归零重新协商 |
 | **邮件投递确认台** | HR 在确认台选择职位后，才创建候选人并启动招聘流程 |
 | **AI 多维度评分** | 工作经验 / 技术技能 / 软技能 / 教育背景 / 项目经验五维打分，结构化 JSON 输出并落库 |
 | **双模型容错** | 主模型（DeepSeek）+ 备用模型（Qwen），`ModelFallbackMiddleware` 自动降级 |
@@ -142,7 +145,7 @@ simplejob/
 │   │   ├── exceptions.py        # 自定义异常层级
 │   │   ├── exception_handlers.py# 全局异常处理器
 │   │   ├── redis_client.py      # Redis 连接池
-│   │   ├── checkpointer.py      # LangGraph 检查点（进程级单例）
+│   │   ├── checkpointer.py      # LangGraph 检查点（连接池 + 进程级单例）
 │   │   ├── http_client.py       # 全局 httpx AsyncClient
 │   │   ├── logging_config.py    # 日志配置（非阻塞队列 + 轮转 + 分级）
 │   │   ├── audit.py             # 安全审计日志
@@ -162,6 +165,8 @@ simplejob/
 │   ├── models/                  # SQLAlchemy ORM 模型
 │   │   ├── candidate.py         # 候选人 / 简历 / AI 评分
 │   │   ├── mail_submission.py   # 邮件投递待确认记录
+│   │   ├── mail_review.py       # 意图识别待人工复核
+│   │   └── candidate_status_history.py # 候选人状态变更链
 │   │   ├── position.py          # 职位
 │   │   ├── InterviewModel.py    # 面试记录
 │   │   └── user.py              # 用户 / 部门 / 钉钉绑定
@@ -172,9 +177,11 @@ simplejob/
 │   ├── service/                 # 业务逻辑层
 │   │   ├── candidate_status_ser.py # 状态流转校验 + 人工重试触发
 │   │   ├── mail_submission_ser.py  # 投递确认 / 拒绝
+│   │   ├── mail_review_ser.py      # 意图复核：确认意图并执行动作
 │   │   └── ...
 │   ├── routers/                 # 路由层
 │   │   ├── mail_submission_router.py # 邮件投递确认台接口
+│   │   ├── mail_review_router.py     # 意图复核接口
 │   │   └── ...
 │   ├── tasks/                   # 后台任务
 │   │   ├── agent_tasks.py       # 招聘流程执行
@@ -187,13 +194,13 @@ simplejob/
 │       ├── candidate_graph.py   # 图构建（节点 + 边 + 条件路由）
 │       ├── candidate_state.py   # 状态定义（TypedDict）
 │       ├── error_handler.py     # @node_error_wrapper + error_node
-│       └── candidate_nodes/     # 各阶段节点实现
+│       └── candidate_nodes/     # 一个节点一个文件（含 archive/settle 收尾）
 ├── utils/
 │   ├── emailbot/                # 自研异步邮件机器人（IMAP/SMTP/解析/意图/规则）
 │   ├── ocr_service.py           # PaddleOCR 云端 API 封装
 │   ├── PDFser.py                # Word → PDF 转换
 │   └── available_time.py        # 空闲时段计算算法
-├── tests/                       # pytest 测试套件（276 个用例）
+├── tests/                       # pytest 测试套件（286 个用例）
 ├── scripts/                     # 运维脚本
 │   ├── backup.sh                # 数据库备份
 │   ├── deploy.sh                # 部署脚本
@@ -315,7 +322,7 @@ uv run uvicorn app.main:app --reload
 ### 6. 运行测试
 
 ```bash
-uv run pytest          # 276 个用例，约 8 秒
+uv run pytest          # 278 个用例，约 8 秒
 ```
 
 测试不依赖真实数据库 / Redis / 网络：用内存版 Redis 与纯函数覆盖路由、
@@ -336,35 +343,43 @@ uv run pytest          # 276 个用例，约 8 秒
 | 节点 | 类型 | 职责 |
 |------|------|------|
 | `screening` | 纯规则 | 硬性条件筛查（如最低工作年限），不调用 LLM，零成本过滤 |
-| `scoring` | LLM | 五维度评分，结构化 JSON 落库，决定通过/淘汰 |
+| `scoring` | LLM | 五维度评分并落库；达标即进入「待人工确认」 |
+| `manual_decision` | 人工闸门 | `interrupt()` 暂停，等 HR 选择 发送 / 淘汰 / 归档 |
 | `email_invite` | 外部服务 | 读取面试官空闲时段，发送面试邀请邮件 |
 | `get_candidate_email_reply` | 中断点 | `interrupt()` 暂停，等待候选人邮件回复后 resume |
 | `check_availability` | LLM + 外部服务 | 解析候选人回复的时间意图，对照钉钉日历校验空闲 |
 | `confirm` | 外部服务 + DB | 发确认邮件 + 创建钉钉日程 + 创建面试记录 + 更新候选人状态 |
+| `recheck_interview_slot` | 外部服务 | 建日程前复核该时段是否仍空闲（并拒绝已过去的时间），被占用则轮次归零重发 |
 | `rejected` / `refused` | DB | 淘汰 / 候选人拒绝，更新状态 |
 | `negotiation_expired` | DB | 超过协商轮次上限或回复超时，更新状态 |
 | `error` | 错误终结点 | 记录错误日志，更新候选人状态为 `PROCESSING_ERROR` |
+| `archive` / `settle` | 收尾 | 所有终态强制经过：写 `archived_at` + 链尾 `next_id='-1'`（归档）/ `'-2'`（结算） |
 | **人工通过/重试** | HR 干预 | HR 在失败后手动触发，通过 `Command(goto="email_invite")` 重启协商流程 |
 
 ### 候选人状态机
 
 ```
-已投递 → AI筛选失败 / AI筛选成功 → 待面试 → 面试通过 / 面试未通过 → 已入职
-            │                         ↑
-            │                         │
-            └──→ 人工通过/重试 ──────┘
-                      ↑
-        协商超时 ──────┤
-                      │
-        处理异常 ──────┘
-
-拒绝面试（终态）
+已投递
+  ├─ 筛选/评分未通过 ─→ AI筛选失败 ─┐
+  └─ 达标 ─→ 待人工确认（闸门）      │
+        ├─ 发送 ─→ 面试时间协商中 ──┤
+        │       ├─ 确认时间 ─→ 待面试 → [结算] → END
+        │       ├─ 拒绝 ─→ 拒绝面试 ─┤
+        │       └─ 轮次耗尽/超时 ─→ 协商超时 ─┤
+        ├─ 淘汰 ─→ AI筛选失败 ──────┤
+        └─ 归档 ──────────────────┤
+     处理异常 ────────────────────┘
+              ↓ archive_node（写 archived_at，next_id='-1'）
+             END
 ```
 
-**状态流转规则**：
-- 正常流程：`已投递` → `AI筛选成功` → `待面试` → ...
-- 失败后补救：`AI筛选失败` / `协商超时` / `处理异常` → `人工通过/重试` → `待面试`
-- 人工通过/重试由 HR/管理员触发，重启 `email_invite` 节点
+**要点**：
+- 评分达标**直接**进入 `待人工确认`（`AI筛选成功` 只作为链上的评分结论保留）；
+- 要推进只能走闸门的「发送」；`待人工确认` 不能手动改成「面试时间协商中」——
+  那样会绕过闸门且不发邀请（实测导致状态与检查点脱节）；
+- 归档与结算**都写 `archived_at`**（语义是「图流程走完」），靠 `next_id` 区分
+  `-1`（淘汰/放弃/异常）与 `-2`（正常完成，转人工维护）；
+- 重试走 `Command(goto="email_invite")`，并**新建一条链**（旧链保留）。
 
 ### 邮件投递确认台
 
@@ -382,13 +397,26 @@ HR 在确认台选择职位 → 确认
 创建候选人 + 启动招聘流程
 ```
 
+### 意图复核台
+
+LLM 判不准（`needs_review` / `AMBIGUOUS`），或**候选人回复了但流程不在等待**时，
+邮件落进 `mail_reviews`，由 HR 确认意图并**执行对应动作**：
+
+```
+GET  /mail-reviews              列表（待复核/已处理/已忽略）
+GET  /mail-reviews/{id}         详情（正文、AI 猜测、判据、证据）
+POST /mail-reviews/{id}/resolve {action: execute|ignore, intent?}
+```
+
 ### 超时自动巡检
 
 ```
 定时任务（默认每 15 分钟）
         ↓
-扫描 email_invite_sent_at 超过 48 小时
-且状态仍为 AI筛选成功 / 人工通过/重试 的候选人
+扫状态变更链：状态=面试时间协商中 + 链上最新（next_id IS NULL）
++ COALESCE(最后来信时间, 变更时间) 超过 48 小时
+        ↓
+校验中断点身份（必须是「等待候选人回复」）
         ↓
 Command(resume=EMAIL_REPLY_TIMEOUT) 恢复状态图
         ↓
@@ -528,6 +556,14 @@ logger.info(...) → QueueHandler → 队列 → 监听进程/线程 → 文件
 | POST | `/mail-submissions/{id}/confirm` | 确认投递（建人并起图） |
 | POST | `/mail-submissions/{id}/reject` | 拒绝投递 |
 
+### 意图复核
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/mail-reviews` | 复核列表（按状态筛选，HR/超管） |
+| GET | `/mail-reviews/{id}` | 复核详情 |
+| POST | `/mail-reviews/{id}/resolve` | 确认意图并执行 / 忽略 |
+
 ### 日程
 
 | 方法 | 路径 | 说明 |
@@ -541,32 +577,34 @@ logger.info(...) → QueueHandler → 队列 → 监听进程/线程 → 文件
 ```
 tests/
 ├── conftest.py                # 夹具：内存 Redis（含 Lua 语义）/ 临时工作目录
-├── test_auth_tokens.py        # Token 生命周期（10）
-├── test_candidate_history.py     # 状态变更链 / thread_id 隔离 / 收尾节点 / 邀请邮件（14）
-├── test_bugfixes_1117.py      # 11-17 缺陷修复回归（50）
-├── test_candidate_ownership.py# 候选人接口归属校验（6）
-├── test_change_password.py    # 修改密码（22）
-├── test_confirm_branch.py     # 「同意原时间」分支（5）
-├── test_email_invite_guard.py # 邀请节点错误守卫（6）
-├── test_email_reply_interrupt.py # 中断点（3）
-├── test_exception_wrapper.py  # 节点异常包装（5）
-├── test_graph_routes.py       # 状态图路由（24）
-├── test_hardening.py          # 安全加固（6）
-├── test_intent.py             # 意图识别（9）
-├── test_llms_lazy.py          # LLM 客户端懒加载（3）
-├── test_logging_routing.py    # 日志分流（9）
-├── test_mail_review.py          # 意图复核（7）
-├── test_manual_decision.py    # 人工闸门 / 中断点身份（17）
-├── test_negotiation_loop.py   # 协商主链路（8）
-├── test_notify_resume_guard.py # 恢复前校验中断点（3）
-├── test_rate_limit.py         # 滑动窗口限流（7）
-├── test_scheduler.py          # 后台调度与重试（32）
-└── test_time_policy.py        # 时区策略（16）
+├── test_auth_tokens.py             # Token 生命周期（10）
+├── test_bugfixes_1117.py           # 11-17 缺陷修复回归（52）
+├── test_cache_control.py           # 接口禁用浏览器缓存（3）
+├── test_calendar_events.py         # 日程接口（3）
+├── test_candidate_history.py       # 状态变更链 / thread_id / 收尾节点 / 邀请邮件 / 备选时段 / 终态写链 / 权限（21）
+├── test_candidate_ownership.py     # 候选人接口归属校验（6）
+├── test_change_password.py         # 修改密码（22）
+├── test_confirm_branch.py          # 「同意原时间」分支（5）
+├── test_email_invite_guard.py      # 邀请节点错误守卫（6）
+├── test_email_reply_interrupt.py   # 中断点（3）
+├── test_exception_wrapper.py       # 节点异常包装（5）
+├── test_graph_routes.py            # 状态图路由（27）
+├── test_hardening.py               # 安全加固（6）
+├── test_intent.py                  # 意图识别 + evidence 清洗（11）
+├── test_llms_lazy.py               # LLM 客户端懒加载（3）
+├── test_logging_routing.py         # 日志分流（9）
+├── test_mail_review.py             # 意图复核（7）
+├── test_manual_decision.py         # 人工闸门 / 中断点身份（16）
+├── test_negotiation_loop.py        # 协商主链路（8）
+├── test_notify_resume_guard.py     # 恢复前校验中断点（3）
+├── test_rate_limit.py              # 滑动窗口限流（7）
+├── test_recheck_interview_slot.py  # 建日程前复核（6）
+├── test_redis_getter.py            # Redis getter 同步化（3）
+├── test_scheduler.py               # 后台调度与重试（28）
+└── test_time_policy.py             # 时区策略（16）
+
+# 合计 286 个用例
 ```
-
-**共 276 个用例**，运行约 8 秒，不依赖真实数据库 / Redis / 网络。
-
----
 
 ## 📧 邮件机器人
 
@@ -597,6 +635,10 @@ tests/
 | [`docs/intent_recognition_implementation.md`](docs/intent_recognition_implementation.md) | 邮件意图识别实现 |
 | [`docs/periodic_task_refactor.md`](docs/periodic_task_refactor.md) | 周期任务重构（含分布式锁） |
 | [`docs/workflow_email_integration.md`](docs/workflow_email_integration.md) | 邮件机器人与招聘工作流的集成说明 |
+| [`docs/candidate_status_history_design.md`](docs/candidate_status_history_design.md) | 状态变更链（`candidate_status_history`）设计 |
+| [`docs/change2026-11-19.md`](docs/change2026-11-19.md) | 变更记录 11-19（节点拆分、人工闸门、四项事故修复、状态链落地） |
+| [`docs/change2026-11-20.md`](docs/change2026-11-20.md) | 变更记录 11-20（流程脱节修复、回复兜底、检查点连接池、四项收尾） |
+| [`事故汇总.md`](事故汇总.md) | 6 起缺陷事故的现象 / 根因 / 修复 / 教训与共性分析 |
 
 ---
 

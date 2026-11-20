@@ -117,3 +117,24 @@ def test_cache_returns_same_result(monkeypatch):
     r1 = asyncio.run(classify_intent(mail, role=SenderRole.CANDIDATE))
     r2 = asyncio.run(classify_intent(mail, role=SenderRole.CANDIDATE))
     assert r1 is r2
+
+
+# ---------------- evidence 清洗（模型偶发输出 JSON 碎片） ----------------
+
+def test_evidence_drops_json_fragments():
+    """实测出现过 evidence=":[" —— 模型把 JSON 结构碎片当成了片段。"""
+    from utils.emailbot.intent import MailIntent, MailIntentResult
+
+    assert MailIntentResult(intent=MailIntent.AMBIGUOUS, evidence=":[").evidence == ""
+    assert MailIntentResult(intent=MailIntent.AMBIGUOUS, evidence="{...}").evidence == ""
+    assert MailIntentResult(intent=MailIntent.AMBIGUOUS, evidence="   ").evidence == ""
+
+
+def test_evidence_keeps_real_quote_and_caps_length():
+    from utils.emailbot.intent import MailIntent, MailIntentResult
+
+    r = MailIntentResult(intent=MailIntent.INTERVIEW_REPLY, evidence="候选人提出下午2点")
+    assert r.evidence == "候选人提出下午2点"
+
+    long = MailIntentResult(intent=MailIntent.INTERVIEW_REPLY, evidence="甲" * 500)
+    assert len(long.evidence) == 200

@@ -9,7 +9,6 @@ from app.agents.prompts import PROPOSED_TIME_SYSTEM_PROMPT
 from app.core.config import get_settings
 from app.core.exceptions import (
     DingTalkServiceError,
-    EmailSendError,
     NegotiationError,
 )
 from app.schemas.intent_schema import ProposedTime
@@ -168,9 +167,6 @@ def parse_proposed_time(raw: str) -> datetime:
 
 async def _extract_time_from_reply(state: CandidateRecruitmentState, reply: str) -> ProposedTime:
     """从邮件正文中提取结构化面试意向（直接 LLM 调用，时间注入 Prompt）。
-
-    原实现通过 ``create_agent`` + ``get_current_time`` 工具让模型自查时间；
-    这里改为把当前时间直接拼进 System Prompt，省掉一次工具往返。
     """
     current_time_text = _build_current_time_text()
     system_prompt = (
@@ -196,22 +192,57 @@ async def _extract_time_from_reply(state: CandidateRecruitmentState, reply: str)
     return result
 
 
-async def _notify_candidate_slot_unavailable(candidate, proposed_dt: datetime) -> None:
-    """best-effort 回信：告知提议时间不可用并请候选人另选。
+async def _load_alternative_slots(state) -> str:
+    """查面试官最近可用时段，格式化成最多 3 行；查不到返回空串。
+
+    查失败不影响主流程——这里只是给候选人的**备选建议**。
+    """
+    try:
+        slots = await get_user_available_slots(state["interviewer"].id)
+    except Exception:  # noqa: BLE001 - 备选时段是增强项
+        logger.warning(
+            "[check_avail] 查询备选时段失败 | candidate_id=%s",
+            state["candidate"].id, exc_info=True,
+        )
+        return ""
+    return "\n".join(
+        f"{i}. {start.strftime('%Y-%m-%d %H:%M')} - {end.strftime('%Y-%m-%d %H:%M')}"
+        for i, (start, end) in enumerate(slots[:3], start=1)
+    )
+
+
+async def _notify_candidate_slot_unavailable(state, proposed_dt: datetime) -> None:
+    """best-effort 回信：告知提议时间不可用，并附上面试官的备选时段。
+
     发信失败只记日志、不改变流程推进 —— 回信是体验优化，不能因为它把
     协商轮次卡住。
     """
+    candidate = state["candidate"]
     try:
         from utils.emailbot.mail_manager import get_mail_bot_
 
         email_bot = get_mail_bot_()
         if not email_bot.is_connected:
             await email_bot.connect()
+
+        # 顺便把面试官的备选时段列出来：只说「这个时间不行」而不给替代，
+        # 候选人只能再猜一个时间来回一轮，协商会被拖长好几天。
+        slot_list = await _load_alternative_slots(state)
+        if slot_list:
+            suggestion = (
+                "面试官近期有以下时间段可供面试（按时间先后）：\n"
+                f"{slot_list}\n"
+                "请您回复方便的时间（例如「确认」表示第一个时间段）。\n"
+                "如果以上都不方便，请回复您方便的时间，我们将会重新协商面试时间。"
+            )
+        else:
+            suggestion = "麻烦您再提供一到两个方便的时间，我们会尽快确认。"
+
         body = f"""
 尊敬的{candidate.name}，
 您好！
 感谢您的回复。您提出的面试时间（{proposed_dt.strftime('%Y-%m-%d %H:%M')}）面试官暂时无法安排。
-麻烦您再提供一到两个方便的时间，我们会尽快确认。
+{suggestion}
 谢谢！
 """
         await email_bot.send_email(
@@ -251,7 +282,7 @@ async def can_not_find_available_time(
     )
 
     if notify_candidate and proposed_dt is not None:
-        await _notify_candidate_slot_unavailable(candidate, proposed_dt)
+        await _notify_candidate_slot_unavailable(state, proposed_dt)
 
     return {
         "current_stage": "negotiation",

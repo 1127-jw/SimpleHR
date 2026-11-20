@@ -179,9 +179,13 @@ async def notify(email: ParsedEmail, rule: MailRule | None = None) -> MailIntent
         return result
     # 面试协商回复
     if result.intent is MailIntent.INTERVIEW_REPLY:
-        await _resume_candidate_graph(
+        resumed = await _resume_candidate_graph(
             email, candidate_schema, position_schema, interviewer_schema
         )
+        if not resumed:
+            # 候选人的回复没有对应的等待中断点（流程停在别处 / 邀请还没发）。
+            # 这封邮件对 HR 有价值，落进「意图复核」，别让它石沉大海。
+            await _enqueue_human_review(email, result)
         return result
     # 询问进度/结果
     if result.intent is MailIntent.PROGRESS_INQUIRY:
@@ -201,18 +205,23 @@ async def _resume_candidate_graph(
     candidate_schema: CandidateSchema | None,
     position_schema: PositionSchema | None,
     interviewer_schema: UserSH | None,
-) -> None:
-    """恢复招聘图：仅在候选人在协商中、且 checkpoint 停在等待回复中断点。"""
+) -> bool:
+    """恢复招聘图：仅在候选人在协商中、且 checkpoint 停在等待回复中断点。
+
+    Returns:
+        True 表示已发起恢复；False 表示状态不匹配、**没有**恢复。
+        调用方据此把这封邮件落进「意图复核」，避免候选人的回复石沉大海。
+    """
     if not candidate_schema:
         logger.warning("未找到候选人，不恢复图 | from=%s", email.from_.address)
-        return
+        return False
 
     if candidate_schema.status not in _RESUMABLE_STATUS:
         logger.info(
             "候选人不在协商中，不恢复图 | candidate_id=%s | status=%s",
             candidate_schema.id, candidate_schema.status,
         )
-        return
+        return False
 
     thread_id = thread_id_of(candidate_schema.id)
     # 复用模块级编译图，避免每次恢复都重新编译
@@ -228,11 +237,11 @@ async def _resume_candidate_graph(
             "[notify] 中断点不是等待候选人回复，不恢复图 | candidate_id=%s | thread_id=%s",
             candidate_schema.id, thread_id,
         )
-        return
+        return False
 
     if not settings.GRAPH_OPEN:
         logger.info("GRAPH_OPEN=false，仅记录不执行 | thread_id=%s", thread_id)
-        return
+        return False
 
     from app.core.limiters import task_slot
     from app.service.candidate_status_ser import mark_candidate_error
@@ -268,6 +277,9 @@ async def _resume_candidate_graph(
             candidate_schema.id, thread_id, e, exc_info=True,
         )
         await mark_candidate_error(candidate_schema.id, f"恢复招聘图失败: {e}")
+        return False
+
+    return True
 
 
 async def _handle_resume_submission(email: ParsedEmail) -> None:

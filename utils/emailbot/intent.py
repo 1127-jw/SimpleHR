@@ -11,11 +11,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 from enum import Enum
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableWithFallbacks
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.agents.llms import get_deepseek_llm, get_qwen_llm
 from app.core.config import get_settings
@@ -65,6 +66,20 @@ class MailIntentResult(BaseModel):
     reason: str = Field(default="", description="分类理由")
     needs_review: bool = Field(default=False, description="低置信或信息不足，需人工复核")
 
+    @field_validator("evidence", mode="after")
+    @classmethod
+    def _clean_evidence(cls, value: str) -> str:
+        """清洗 ``evidence``：模型偶发输出 JSON 碎片（实测出现过 ``":[``）。
+
+        规则：去掉首尾空白 → 太短（<4）或**不含任何文字**（字母/数字/汉字）
+        的一律视为碎片置空；否则截断到 200 字。复核页要拿它给人看，
+        留一串符号只会误导。
+        """
+        text = (value or "").strip()
+        if len(text) < 4 or not re.search(r"[\w\u4e00-\u9fff]", text):
+            return ""
+        return text[:200]
+
 
 # ==================== 提示词 ====================
 
@@ -89,6 +104,8 @@ INTENT_SYSTEM_PROMPT = """你是招聘邮箱的意图分类器。根据【发件
 
 # 输出
 严格输出 JSON：intent、sub_intent、confidence(0-1)、slots、evidence、reason、needs_review。
+其中 evidence 必须是【邮件正文】里支撑该判定的**连续原文片段**（≤50 字），
+不要输出 JSON 结构、符号或换行；找不到合适的原文就留空字符串。
 """
 
 INTENT_USER_PROMPT = """【发件人身份】{role}

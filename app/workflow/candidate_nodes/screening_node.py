@@ -1,6 +1,8 @@
 import logging
 
 from app.core.config import get_settings
+from app.models.candidate import CandidateStatusEnum
+from app.workflow.candidate_nodes.terminal_records import record_node_transition
 from app.workflow.candidate_state import CandidateRecruitmentState
 from app.workflow.error_handler import node_error_wrapper
 
@@ -29,6 +31,10 @@ async def screening_node(state: CandidateRecruitmentState) -> dict:
             "[screening] rejected: work_year insufficient | "
             "candidate_id=%s | required=%d, actual=%d",
             cid, position.work_year, candidate.work_year,
+        )
+        # 状态 + 链一起写：筛选未通过是终态，链要能追溯到「为什么没过」
+        await record_node_transition(
+            candidate, position, CandidateStatusEnum.AI_FILTER_FAILED,
         )
         return {
             "screening_passed": False,

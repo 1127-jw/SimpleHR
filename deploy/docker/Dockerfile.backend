@@ -1,0 +1,25 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# uv 包管理
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# 依赖（利用缓存）
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
+# 源码
+COPY app ./app
+COPY utils ./utils
+COPY alembic ./alembic
+COPY alembic.ini gunicorn.conf.py init_data.py ./
+COPY scripts ./scripts
+
+# 数据卷
+VOLUME ["/app/upload", "/app/attachments", "/app/logs"]
+
+ENV PYTHONUNBUFFERED=1
+EXPOSE 8000
+
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -64,8 +64,6 @@ async def _enter_negotiation(candidate_id, candidate, position) -> None:
 async def email_invite_node(state: CandidateRecruitmentState) -> dict:
     """
     发送面试邀请邮件节点。
-    复用 agents/candidate.py L135-L187 的 get_interviewer_available_slot 工具逻辑
-    和 L189-L229 的邀请邮件发送逻辑。
     """
     interviewer = state["interviewer"]
     candidate = state["candidate"]

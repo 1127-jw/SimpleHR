@@ -91,6 +91,16 @@ async def create_candidate(
 ):
     candidate_schema, position_schema, interviewer_schema= await create_candidate_ser(session,current_user,candidate_data)
 
+    # 「跳过筛选」等于绕过 AI 评估，只允许 HR / 超管使用。
+    # 普通员工即使传了也直接拒绝，避免越权。
+    if candidate_data.skip_scoring and not (
+        current_user.is_hr or current_user.is_superuser
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="仅 HR / 超管可跳过 AI 筛选与评分",
+        )
+
     background_tasks.add_task(
         run_candidate_agent,
         candidate=candidate_schema,

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.core.exceptions import EmailSendError
-from app.core.time import BEIJING_TZ
+from app.core.time import BEIJING_TZ, now_beijing
 from app.workflow import candidate_graph as graph_mod
 from app.workflow.candidate_nodes import recheck_interview_slot_node as recheck_mod
 from app.workflow.candidate_state import (
@@ -19,7 +19,9 @@ from app.workflow.candidate_state import (
     REPLY_TIME_AVAILABLE,
 )
 
-PROPOSED = datetime(2026, 11, 20, 10, 30, tzinfo=BEIJING_TZ)
+# 动态取「48 小时后」：写死日期的话，测试跑过那天就会因为
+# 「时段已过去」的新校验而集体变红。
+PROPOSED = now_beijing() + timedelta(hours=48)
 
 
 @dataclass
@@ -53,8 +55,14 @@ def _state(**overrides) -> dict:
 
 
 async def _slots_free(**kwargs):
-    """10:00 - 11:00 一整段空闲，能容纳 10:30 起的面试。"""
-    return [(PROPOSED.replace(minute=0), PROPOSED.replace(minute=0) + timedelta(hours=1))]
+    """从 PROPOSED 整点起 2 小时空闲，能容纳 PROPOSED 起的 30 分钟面试。
+
+    注意：PROPOSED 是 ``now + 48h``，分钟/秒是随机的；不能用
+    ``PROPOSED.replace(minute=0)`` 当起点（只清分钟、保留秒，会得到
+    ``12:00:35`` 这种起点，导致 ``PROPOSED + 30min`` 超出 1 小时窗口）。
+    """
+    start = PROPOSED.replace(minute=0, second=0, microsecond=0)
+    return [(start, start + timedelta(hours=2))]
 
 
 async def _slots_busy(**kwargs):
@@ -109,7 +117,7 @@ async def test_taken_slot_resets_round_and_renotifies(monkeypatch):
     assert result["candidate_email_reply"] == REPLY_SLOT_TAKEN
     assert result["negotiation_round"] == 0, "必须归零，否则重新协商没有完整轮次"
     assert len(bot.sent) == 1
-    assert "10:30" in bot.sent[0]["text"]
+    assert PROPOSED.strftime("%Y-%m-%d %H:%M") in bot.sent[0]["text"]
 
     merged = {**_state(), **result}
     assert (
@@ -154,3 +162,27 @@ def test_production_graph_wires_recheck():
         "error",
     }
     assert all(e.conditional for e in recheck_edges), "出边必须是条件边，错误守卫才生效"
+
+
+async def test_past_slot_is_treated_as_unavailable(monkeypatch):
+    """时段已经过去：不必再查钉钉，直接按「不可用」重启协商。
+
+    协商可能拖过周末/假期，候选人确认的可能是个已经过去的时间。
+    """
+    bot = _RecordingBot()
+
+    def _should_not_be_called(*a, **k):
+        raise AssertionError("时段已过去时不应再调用钉钉")
+
+    monkeypatch.setattr(recheck_mod, "get_user_available_slots", _should_not_be_called)
+    monkeypatch.setattr("utils.emailbot.mail_manager.get_mail_bot_", lambda: bot)
+
+    past = now_beijing() - timedelta(hours=2)
+    result = await recheck_mod.recheck_interview_slot_node(
+        _state(proposed_interview_time=past, negotiation_round=1)
+    )
+
+    assert result["candidate_email_reply"] == REPLY_SLOT_TAKEN
+    assert result["negotiation_round"] == 0
+    assert len(bot.sent) == 1
+    assert past.strftime("%Y-%m-%d %H:%M") in bot.sent[0]["text"]

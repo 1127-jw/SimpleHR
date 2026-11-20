@@ -2,10 +2,6 @@
 
 节点里凡是需要「发信失败就报错、让流程进 error 节点」的场合都走这里，
 不要再各写一份（invite / confirm / 复核失败重发共用）。
-
-注意：另两个通知（``check_availability_node`` 的「时段不可用」、
-``negotiation_expired_node`` 的「协商暂停」）是 **best-effort** 的，
-刻意不报错，它们自己包 try/except，不走本模块。
 """
 from __future__ import annotations
 

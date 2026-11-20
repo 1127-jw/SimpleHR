@@ -38,9 +38,9 @@ export const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   [CandidateStatusEnum.AI_FILTER_PASSED]: [
     CandidateStatusEnum.WAITING_FOR_INTERVIEW,
   ],
-  // 待人工确认：确认发送（进入协商）、淘汰
+  // 待人工确认：只能淘汰。要推进请走闸门（approve 会自己进入协商并发邀请），
+  // 手动改成「面试时间协商中」会绕过闸门、不发邀请，造成状态与检查点脱节。
   [CandidateStatusEnum.PENDING_MANUAL_DECISION]: [
-    CandidateStatusEnum.NEGOTIATING,
     CandidateStatusEnum.AI_FILTER_FAILED,
   ],
   // 面试时间协商中：拒绝 / 轮次耗尽 / 回复超时 / 确认时间

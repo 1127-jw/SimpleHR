@@ -5,6 +5,7 @@ from app.core.db import AsyncSessionFactory
 from app.models.candidate import CandidateStatusEnum
 from app.repository.resume_repo import CandidateRepo
 from app.workflow.candidate_state import CandidateRecruitmentState
+from app.workflow.candidate_nodes.terminal_records import record_node_transition
 from app.workflow.error_handler import node_error_wrapper
 
 settings = get_settings()
@@ -13,9 +14,6 @@ logger = logging.getLogger(settings.NODE_LOGGER_NAME)
 
 async def _notify_candidate_expired(candidate) -> None:
     """best-effort 通知：协商超时。
-
-    此前这个节点只改库、不发信，候选人从「邀请邮件」之后就再没收到任何消息，
-    直到 HR 主动联系。发信失败只记日志，不影响状态推进。
     """
     try:
         from utils.emailbot.mail_manager import get_mail_bot_
@@ -55,12 +53,11 @@ async def negotiation_expired_node(state: CandidateRecruitmentState) -> dict:
         cid, state.get("negotiation_round", 0),
     )
 
-    async with AsyncSessionFactory() as session:
-        async with session.begin():
-            repo = CandidateRepo(session)
-            await repo.update_candidate_status(
-                candidate_id=cid, status=CandidateStatusEnum.NEGOTIATION_EXPIRED,
-            )
+    # 状态 + 状态变更链一起写（去重由 helper 负责）
+    await record_node_transition(
+        state["candidate"], state["position"],
+        CandidateStatusEnum.NEGOTIATION_EXPIRED,
+    )
 
     logger.info("[negotiation_expired] status updated | candidate_id=%s", cid)
 

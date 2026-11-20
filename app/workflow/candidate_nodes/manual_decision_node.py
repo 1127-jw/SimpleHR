@@ -1,6 +1,4 @@
 """人工闸门节点：AI 评分通过后、发邀请邮件前，等 HR 决定要不要发。
-
-单独成文件：图里每个节点一个 ``*.py``。
 """
 from __future__ import annotations
 
@@ -57,11 +55,6 @@ async def _set_status(candidate_id: str, status: CandidateStatusEnum) -> None:
 
 async def manual_decision_node(state: CandidateRecruitmentState) -> dict:
     """人工闸门：评分通过后暂停，等 HR 决定要不要发面试邀请邮件。
-
-    **不要**给这个节点加 ``@node_error_wrapper``：它靠 ``interrupt()`` 抛出的
-    ``GraphInterrupt`` 让图暂停，包装器的「未知异常」分支会把 ``GraphInterrupt``
-    吞成 ``AppException``，图就永远不会暂停（同 ``get_candidate_email_reply_node``）。
-
     恢复方式：``POST /candidate/{id}/manual-decision`` → ``Command(resume=...)``。
     """
     candidate = state["candidate"]

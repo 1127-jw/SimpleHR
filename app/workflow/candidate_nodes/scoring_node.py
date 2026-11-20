@@ -24,7 +24,6 @@ logger = logging.getLogger(settings.NODE_LOGGER_NAME)
 
 def _build_score_llm() -> RunnableWithFallbacks:
     """构建带 fallback 的结构化评分 LLM。
-
     deepseek 失败时自动降级到 qwen，保持与旧 Agent ModelFallbackMiddleware 等价的容错能力。
     """
     primary = get_deepseek_llm().with_structured_output(AgentCandidateScoreSchema)

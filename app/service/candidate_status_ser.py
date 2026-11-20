@@ -61,9 +61,11 @@ ALLOWED_TRANSITIONS: dict[CandidateStatusEnum, set[CandidateStatusEnum]] = {
         CandidateStatusEnum.PENDING_MANUAL_DECISION,
         CandidateStatusEnum.WAITING_FOR_INTERVIEW,
     },
-    # 待人工确认：确认发送（进入协商）、淘汰，或归档（保持当前状态）
+    # 待人工确认：可以淘汰，但**不能**手动改成「面试时间协商中」——
+    # 那样会绕过闸门且不发邀请，造成「状态说在协商、检查点还停在闸门」的脱节
+    # （实测事故：候选人根本没收到邀请却回复了改期，流程卡死）。
+    # 要推进请走闸门的 approve，它会自己写「面试时间协商中」并去发邀请。
     CandidateStatusEnum.PENDING_MANUAL_DECISION: {
-        CandidateStatusEnum.NEGOTIATING,
         CandidateStatusEnum.AI_FILTER_FAILED,
     },
     # 面试时间协商中：候选人拒绝 / 轮次耗尽 / 回复超时
