@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.agents.llms import build_structured_llm
 from app.core.config import get_settings
+from app.models.candidate import CandidateStatusEnum
 from utils.emailbot.models import ParsedEmail
 from utils.emailbot.rules import DEFAULT_RULES, MailRule, RuleAction
 
@@ -101,6 +102,9 @@ INTENT_SYSTEM_PROMPT = """你是招聘邮箱的意图分类器。根据【发件
 3. AUTO_REPLY 优先级最高：命中自动回复特征时直接判定，不再看其他意图。
 4. 「规则先验」只是线索，不是结论；与邮件内容冲突时以邮件内容为准。
 5. 无法确定时判 AMBIGUOUS 并把 needs_review 设为 true，不要猜。
+6. 若【候选人状态】为「待面试」，说明面试时间已确认，**当前系统不支持重新协商**：
+   此时收到的改期 / 确认类回复不得判为 INTERVIEW_REPLY，
+   应判为 AMBIGUOUS 或 PROGRESS_INQUIRY 并把 needs_review 设为 true，交人工处理。
 
 # 输出
 严格输出 JSON：intent、sub_intent、confidence(0-1)、slots、evidence、reason、needs_review。
@@ -204,6 +208,24 @@ async def classify_intent(
 
     if result.confidence < settings.INTENT_CONFIDENCE_THRESHOLD:
         result.needs_review = True
+
+    # 「待面试」= 面试时间已确认。当前系统不支持「待面试 → 重新协商」，
+    # 把这类回复判成 INTERVIEW_REPLY 只会让 notify 走一条走不通的恢复路径
+    # （状态不在 _RESUMABLE_STATUS → 转人工）。与其让它显示成「面试回复」，
+    # 不如在意图层就明确转人工复核。该能力已在规划中，落地后移除此兜底。
+    if (
+        candidate_status == CandidateStatusEnum.WAITING_FOR_INTERVIEW.value
+        and result.intent is MailIntent.INTERVIEW_REPLY
+    ):
+        logger.info(
+            "[intent] 候选人状态为「待面试」，改期/确认回复转人工复核 | status=%s",
+            candidate_status,
+        )
+        result.intent = MailIntent.AMBIGUOUS
+        result.needs_review = True
+        result.reason = (
+            f"{result.reason} | 候选人状态为「待面试」，系统暂不支持重新协商，转人工复核"
+        ).strip(" |")
 
     if len(_cache) >= settings.INTENT_CACHE_SIZE:
         _cache.clear()

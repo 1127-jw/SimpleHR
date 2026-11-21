@@ -138,3 +138,84 @@ def test_evidence_keeps_real_quote_and_caps_length():
 
     long = MailIntentResult(intent=MailIntent.INTERVIEW_REPLY, evidence="甲" * 500)
     assert len(long.evidence) == 200
+
+
+# ---------------- 「待面试」状态：走不通的恢复路径不显示为面试回复 ----------------
+
+def test_waiting_interview_forces_review_even_when_rule_says_reply(monkeypatch):
+    """规则兜底判成 INTERVIEW_REPLY，但候选人已「待面试」→ 强制转人工。
+
+    系统当前不支持「待面试 → 重新协商」（已规划），
+    与其让 notify 走一条走不通的恢复路径，不如在意图层明确转人工。
+    """
+    from app.models.candidate import CandidateStatusEnum
+
+    intent_module._cache.clear()
+    monkeypatch.setattr(intent_module.settings, "INTENT_ENGINE", "rule")
+    r = asyncio.run(classify_intent(
+        _mail("Re: 面试邀请", "面试时间想改到下周"),
+        role=SenderRole.CANDIDATE,
+        waiting_reply=True,
+        candidate_status=CandidateStatusEnum.WAITING_FOR_INTERVIEW.value,
+    ))
+    assert r.intent is MailIntent.AMBIGUOUS
+    assert r.needs_review is True
+
+
+def test_waiting_interview_downgrades_llm_reply(monkeypatch):
+    """LLM 明确判 INTERVIEW_REPLY，但候选人已「待面试」→ 同样降级为转人工。"""
+    from app.models.candidate import CandidateStatusEnum
+    from utils.emailbot.intent import MailIntent, MailIntentResult
+
+    intent_module._cache.clear()
+    monkeypatch.setattr(intent_module.settings, "INTENT_ENGINE", "llm")
+
+    async def _fake_llm(_messages):
+        return MailIntentResult(
+            intent=MailIntent.INTERVIEW_REPLY,
+            sub_intent="reschedule",
+            confidence=0.95,
+            evidence="想改到下周",
+            reason="候选人提出改期",
+        )
+
+    monkeypatch.setattr(intent_module, "_classify_with_llm", _fake_llm)
+
+    r = asyncio.run(classify_intent(
+        _mail("Re: 面试邀请", "面试时间想改到下周"),
+        role=SenderRole.CANDIDATE,
+        waiting_reply=True,
+        candidate_status=CandidateStatusEnum.WAITING_FOR_INTERVIEW.value,
+    ))
+    assert r.intent is MailIntent.AMBIGUOUS
+    assert r.needs_review is True
+    assert "待面试" in r.reason
+
+
+def test_negotiating_status_keeps_reply_intent(monkeypatch):
+    """对照组：状态为「面试时间协商中」时，改期回复仍应判 INTERVIEW_REPLY。"""
+    from app.models.candidate import CandidateStatusEnum
+    from utils.emailbot.intent import MailIntent, MailIntentResult
+
+    intent_module._cache.clear()
+    monkeypatch.setattr(intent_module.settings, "INTENT_ENGINE", "llm")
+
+    async def _fake_llm(_messages):
+        return MailIntentResult(
+            intent=MailIntent.INTERVIEW_REPLY,
+            sub_intent="reschedule",
+            confidence=0.95,
+            evidence="想改到下周",
+            reason="候选人提出改期",
+        )
+
+    monkeypatch.setattr(intent_module, "_classify_with_llm", _fake_llm)
+
+    r = asyncio.run(classify_intent(
+        _mail("Re: 面试邀请", "面试时间想改到下周"),
+        role=SenderRole.CANDIDATE,
+        waiting_reply=True,
+        candidate_status=CandidateStatusEnum.NEGOTIATING.value,
+    ))
+    assert r.intent is MailIntent.INTERVIEW_REPLY
+    assert r.needs_review is False

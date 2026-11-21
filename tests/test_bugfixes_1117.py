@@ -456,9 +456,15 @@ async def test_negotiation_expired_notifies_candidate(monkeypatch):
         async def update_candidate_status(self, **kwargs):
             pass
 
+    async def _record(*args, **kwargs):
+        pass
+
     bot = _RecordingBot()
     monkeypatch.setattr(expired_mod, "AsyncSessionFactory", lambda: _FakeSession())
     monkeypatch.setattr(expired_mod, "CandidateRepo", _Repo)
+    # 节点已改走 terminal_records.record_node_transition，必须一并 mock，
+    # 否则会真的去连数据库（CI 无库直接失败）
+    monkeypatch.setattr(expired_mod, "record_node_transition", _record)
     monkeypatch.setattr("utils.emailbot.mail_manager.get_mail_bot_", lambda: bot)
 
     result = await expired_mod.negotiation_expired_node(_state())
@@ -475,8 +481,12 @@ async def test_expired_notification_failure_is_swallowed(monkeypatch):
         async def update_candidate_status(self, **kwargs):
             pass
 
+    async def _record(*args, **kwargs):
+        pass
+
     monkeypatch.setattr(expired_mod, "AsyncSessionFactory", lambda: _FakeSession())
     monkeypatch.setattr(expired_mod, "CandidateRepo", _Repo)
+    monkeypatch.setattr(expired_mod, "record_node_transition", _record)
     monkeypatch.setattr("utils.emailbot.mail_manager.get_mail_bot_", lambda: _BrokenBot())
 
     result = await expired_mod.negotiation_expired_node(_state())
