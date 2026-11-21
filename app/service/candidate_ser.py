@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import uuid4
 from pathlib import Path
 from app.repository.resume_repo import ResumeRepo, CandidateRepo
+from app.repository.position_repo import PositionRepo
 from app.repository.candidate_history_repo import CandidateStatusHistoryRepo
 from app.models.user import UserModel
 from app.models.candidate import ResumeModel
@@ -101,12 +102,57 @@ async def parse_resume_service(
     background_tasks.add_task(ocr_parse_resume_task,file_path, r, task_id, key)
 
 
+def _ensure_position_visible(position, current_user: UserModel) -> None:
+    """候选人的可见性口径与列表保持一致。
+
+    - 超管：全部职位
+    - HR：自己负责部门的职位
+    - 其他员工：自己创建的职位
+
+    Raises:
+        HTTPException: 该职位对当前用户不可见。
+    """
+    if current_user.is_superuser:
+        return
+    if current_user.is_hr:
+        managed = {d.id for d in current_user.managed_departments}
+        if position.department_id in managed:
+            return
+    elif position.creator_id == current_user.id:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="无权为该职位添加候选人",
+    )
+
+
 async def create_candidate_ser(
         session: AsyncSession,
         current_user:UserModel,
         candidate_data:CandidateCreateSchema
 ):
     async with session.begin():
+        # 先校验职位/简历，再建人：校验放到 flush 之后会让脏数据先落地
+        # （外键违约 → 500；越权 → 建完才发现）。
+        position = await PositionRepo(session).get_by_id(candidate_data.position_id)
+        if position is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"职位不存在: {candidate_data.position_id}",
+            )
+        _ensure_position_visible(position, current_user)
+
+        # 简历允许不传（线下投递 / 手工录入）；传了就必须真实存在，
+        # 否则外键会在 flush 时炸成 500。
+        if candidate_data.resume_id:
+            resume = await ResumeRepo(session).get_by_id_or_none(candidate_data.resume_id)
+            if resume is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"简历不存在: {candidate_data.resume_id}",
+                )
+
         # 建图查重：同邮箱已有活跃流程就不允许重复创建。
         # 归档（'-1'）不在活跃集合里，所以归档后仍可用同一邮箱再投递。
         active = await CandidateStatusHistoryRepo(session).get_active_by_email(
@@ -166,9 +212,11 @@ def parse_education(text: str | None) -> str:
     return "未知"
 
 
-async def candidate_distribution_ser(session: AsyncSession) -> dict:
-    """看板三个饼图的数据：学历分布 / 状态分布 / 职位分布。"""
-    rows = await CandidateRepo(session).distribution_rows()
+async def candidate_distribution_ser(
+    session: AsyncSession, current_user: UserModel
+) -> dict:
+    """看板三个饼图的数据：学历分布 / 状态分布 / 职位分布（按用户可见范围）。"""
+    rows = await CandidateRepo(session).distribution_rows(current_user)
 
     education: dict[str, int] = {}
     status: dict[str, int] = {}

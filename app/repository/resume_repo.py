@@ -254,13 +254,26 @@ class CandidateRepo(BaseRepo):
         )
         return (await self.session.execute(stmt)).all()
 
-    async def distribution_rows(self) -> list[tuple[str, str | None, str]]:
+    async def distribution_rows(
+        self, current_user: UserModel
+    ) -> list[tuple[str, str | None, str]]:
         """看板聚合用：返回 (候选人状态, 教育经历文本, 职位名称)。
+
+        必须带上与列表一致的可见性过滤：否则任意登录用户都能拿到全公司
+        候选人的学历/状态/职位分布，与列表、下载、改状态、评分的收敛口径不一致。
         """
         stmt = (
-            select(CandidateModel.status, CandidateModel.education_experience, PositionModel.title)
+            select(
+                CandidateModel.status,
+                CandidateModel.education_experience,
+                PositionModel.title,
+            )
             .join(PositionModel, CandidateModel.position_id == PositionModel.id)
         )
+        # 复用列表的可见性条件（这里已自行 join 了 positions，只取 where 部分）
+        visibility = await self._visible_stmt(current_user)
+        if visibility.whereclause is not None:
+            stmt = stmt.where(visibility.whereclause)
         return list((await self.session.execute(stmt)).all())
 
 

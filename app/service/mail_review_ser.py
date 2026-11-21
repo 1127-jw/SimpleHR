@@ -7,12 +7,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.db import AsyncSessionFactory
 from app.core.time import db_now
 from app.models.mail_review import MailReviewModel, MailReviewStatusEnum
@@ -26,6 +28,7 @@ from utils.emailbot.notify import (
     _resume_candidate_graph,
 )
 
+settings = get_settings()
 logger = logging.getLogger(__name__)
 
 # 「人工确认后可直接执行」的意图
@@ -115,6 +118,8 @@ async def resolve_review(
             raise ValueError(f"当前状态 {row.status} 不可重复处理")
 
         if action == "ignore":
+            # 忽略没有副作用且天然幂等（并发两次结果相同），
+            # 因此**不需要**租约，直接落状态即可。
             return await repo.resolve(
                 review_id,
                 resolver_id=resolver_id,
@@ -133,9 +138,53 @@ async def resolve_review(
             raise ValueError(f"未知的意图: {intent!r}") from e
         email = _rebuild_email(row)
 
+        # 原子抢占：动作可能有副作用（恢复状态图、发邮件），
+        # 两个 HR 同时点「执行」会重复跑。条件更新命中才算抢到。
+        # 租约由 Settings 给出，且启动期已校验「租约 > 动作硬超时」。
+        if not await repo.claim(
+            review_id,
+            resolver_id=resolver_id,
+            lease_seconds=settings.MAIL_REVIEW_CLAIM_LEASE_SECONDS,
+        ):
+            raise ValueError("该记录正在被其他人处理，请刷新后重试")
+
     # 先执行动作，再落处理结果：动作失败时保持 PENDING，
     # 避免「标记已处理但其实没做」。
-    await execute_intent(email, parsed_intent)
+    #
+    # 硬超时兜底：动作可能触发状态图恢复（LLM + 钉钉 + 发信），
+    # 没有上界的话一次模型挂起就会让记录长期处于「已认领」。
+    # 超时被取消后 checkpoint 仍停在原中断点，重试是安全的。
+    try:
+        await asyncio.wait_for(
+            execute_intent(email, parsed_intent),
+            timeout=settings.MAIL_REVIEW_EXECUTE_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        # 动作失败 / 超时：释放租约，让别人（或本人重试）能立刻再处理，
+        # 而不是等租约自然过期。
+        # 注意：只兜 Exception；外层的 CancelledError（关停）不在此列，
+        # 那种情况让租约自然过期更安全，避免在已取消的任务里做 DB IO。
+        try:
+            async with session.begin():
+                await MailReviewRepo(session).release_claim(
+                    review_id, resolver_id=resolver_id
+                )
+        except Exception:  # noqa: BLE001 - 释放失败只影响可重试延迟
+            logger.warning(
+                "[mail_review] 释放租约失败 | review_id=%s", review_id, exc_info=True
+            )
+
+        if isinstance(exc, TimeoutError):
+            logger.warning(
+                "[mail_review] 动作执行超时（%ss），已释放认领 | review_id=%s",
+                settings.MAIL_REVIEW_EXECUTE_TIMEOUT_SECONDS, review_id,
+            )
+            raise TimeoutError(
+                "复核动作执行超时（"
+                f"{settings.MAIL_REVIEW_EXECUTE_TIMEOUT_SECONDS:.0f}s），"
+                "记录已释放，请稍后重试"
+            ) from exc
+        raise
 
     async with session.begin():
         return await MailReviewRepo(session).resolve(

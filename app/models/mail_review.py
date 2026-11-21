@@ -52,6 +52,11 @@ class MailReviewModel(BaseModel):
         String(16), default=MailReviewStatusEnum.PENDING, index=True
     )
     resolver_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # 认领（占位）时间：**只用于「执行中」的租约判断**，处理动作失败会清空。
+    # 与 resolved_at（处理完成时间）语义不同，不能合并：
+    #   * claimed_at —— 谁在什么时候开始处理，用于防止两个 HR 同时执行；
+    #   * resolved_at —— 什么时候处理完成，面向展示与统计。
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     # 人工最终选定的意图（execute 时）或忽略原因
     resolution: Mapped[str] = mapped_column(Text, default="")

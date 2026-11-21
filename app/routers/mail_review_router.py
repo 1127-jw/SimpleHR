@@ -32,6 +32,8 @@ class MailReviewItem(BaseModel):
     reason: str
     status: str
     resolver_id: Optional[str] = None
+    # 认领时间（执行中才非空）与处理完成时间，语义不同，分别暴露
+    claimed_at: Optional[str] = None
     resolved_at: Optional[str] = None
     resolution: str = ""
     created_at: str
@@ -72,6 +74,7 @@ def _serialize(row) -> dict:
         "reason": row.reason,
         "status": row.status,
         "resolver_id": row.resolver_id,
+        "claimed_at": row.claimed_at.isoformat() if row.claimed_at else None,
         "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
         "resolution": row.resolution,
         "created_at": row.created_at.isoformat() if row.created_at else "",
@@ -131,6 +134,9 @@ async def resolve(
             intent=payload.intent,
             action=payload.action,
         )
+    except TimeoutError as e:
+        # 动作超时：记录已释放回 PENDING，可以稍后重试
+        raise HTTPException(status_code=504, detail=str(e)) from e
     except ValueError as e:
         msg = str(e)
         if "不存在" in msg:

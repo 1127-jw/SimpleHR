@@ -1,10 +1,10 @@
 """意图识别「人工复核」待办的仓储。"""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import db_now
@@ -61,12 +61,11 @@ class MailReviewRepo(BaseRepo):
         status: Optional[str] = None,
         page: int = 1,
         size: int = 20,
-    ) -> tuple[Sequence[MailReviewModel], int]:
+    ) -> tuple[list[MailReviewModel], int]:
         """分页列表，返回 ``(记录, 总数)``。"""
         where = (
             MailReviewModel.status == status if status else None
         )
-        total = 0
         stmt = select(MailReviewModel)
         count_stmt = select(MailReviewModel)
         if where is not None:
@@ -109,3 +108,55 @@ class MailReviewRepo(BaseRepo):
         row.resolved_at = resolved_at or db_now()
         await self.session.flush()
         return row
+
+    # ==================== 并发抢占 ====================
+
+    async def claim(
+        self,
+        review_id: str,
+        *,
+        resolver_id: str,
+        lease_seconds: int = 600,
+    ) -> bool:
+        """原子抢占一条待复核记录，避免两个 HR 同时点「执行」重复跑动作。
+
+        不改 ``status``（仍为 PENDING），而是写 ``resolver_id`` + ``claimed_at``
+        作为租约：条件更新能命中才说明抢到了。
+
+        * 释放：``release_claim``（动作失败时调用，允许他人立刻重试）
+        * 超时：租约过期后自动可被重新抢占，避免进程崩溃导致记录永久锁死
+
+        注意：租约用 ``claimed_at``（认领时间）而**不是** ``resolved_at``
+        （处理完成时间）。后者面向展示与统计，不能被租约语义污染。
+
+        Returns:
+            True 表示抢占成功；False 表示记录已不存在 / 已被处理 / 正被他人处理。
+        """
+        now = db_now()
+        result = await self.session.execute(
+            update(MailReviewModel)
+            .where(
+                MailReviewModel.id == review_id,
+                MailReviewModel.status == MailReviewStatusEnum.PENDING,
+                or_(
+                    MailReviewModel.claimed_at.is_(None),
+                    MailReviewModel.claimed_at < now - timedelta(seconds=lease_seconds),
+                ),
+            )
+            .values(resolver_id=resolver_id, claimed_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount > 0
+
+    async def release_claim(self, review_id: str, *, resolver_id: str) -> None:
+        """释放租约（动作执行失败时调用），让记录回到「无人认领」状态。"""
+        await self.session.execute(
+            update(MailReviewModel)
+            .where(
+                MailReviewModel.id == review_id,
+                MailReviewModel.status == MailReviewStatusEnum.PENDING,
+                MailReviewModel.resolver_id == resolver_id,
+            )
+            .values(resolver_id=None, claimed_at=None)
+            .execution_options(synchronize_session=False)
+        )

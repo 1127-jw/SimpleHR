@@ -153,6 +153,25 @@ class Settings(BaseSettings):
         default="", description="匹配不到职位时的默认职位，留空则转人工"
     )
 
+    # ---------- 意图复核 ----------
+    # 复核「执行」动作可能触发状态图恢复（LLM + 钉钉 + 发信），必须有硬超时：
+    # 否则一次模型挂起就会让记录长时间处于「已认领」状态，别人无法接手。
+    MAIL_REVIEW_EXECUTE_TIMEOUT_SECONDS: float = Field(
+        default=180.0, ge=1.0, description="复核动作的硬超时（秒）"
+    )
+    # 认领租约：必须大于动作硬超时，否则动作还没跑完就会被重新认领 → 重复执行。
+    # 它同时是「进程被硬杀后，记录最晚多久能被别人接手」的上界。
+    MAIL_REVIEW_CLAIM_LEASE_SECONDS: int = Field(
+        default=300, ge=1, description="复核记录认领租约（秒），须大于动作硬超时"
+    )
+
+    # ---------- 图内 LLM 调用 ----------
+    # 评分 / 时间解析走的是同一类结构化调用，之前没有超时兜底：
+    # 模型侧挂起会让节点一直卡住，直到连接被对端断开。
+    LLM_CALL_TIMEOUT_SECONDS: float = Field(
+        default=60.0, ge=1.0, description="图内节点 LLM 调用超时（评分 / 时间解析）"
+    )
+
     # ---------- LangGraph 检查点连接池 ----------
     # 注意：AsyncPostgresSaver 内部有 asyncio.Lock，checkpoint 读写是串行的，
     # 因此池的并发能力用不上；这里限制大小只为节省数据库连接资源，
@@ -319,6 +338,27 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"{name} 太短（{len(value)} 字符），非 debug 环境要求至少 32 字符"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_review_lease(self) -> "Settings":
+        """复核记录的认领租约必须大于动作硬超时。
+
+        租约 <= 动作超时会有两种坏结果：
+        * 动作还没跑完，租约已过期 → 别人可以重新认领 → **重复执行**
+          （重复恢复状态图、重复建投递记录）；
+        * 动作一旦超时被取消，记录很快就能被重试，看似更快，但代价是
+          一个仍在取消过程中的动作可能和新的认领重叠。
+
+        因此在启动期就拦住，而不是等到线上偶发重放。
+        """
+        if self.MAIL_REVIEW_CLAIM_LEASE_SECONDS <= self.MAIL_REVIEW_EXECUTE_TIMEOUT_SECONDS:
+            raise ValueError(
+                "MAIL_REVIEW_CLAIM_LEASE_SECONDS 必须大于 "
+                "MAIL_REVIEW_EXECUTE_TIMEOUT_SECONDS"
+                f"（当前 {self.MAIL_REVIEW_CLAIM_LEASE_SECONDS} <= "
+                f"{self.MAIL_REVIEW_EXECUTE_TIMEOUT_SECONDS}）"
+            )
         return self
 
 

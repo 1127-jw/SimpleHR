@@ -1,9 +1,10 @@
+import asyncio
 import logging
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import RunnableWithFallbacks
 
-from app.agents.llms import get_deepseek_llm, get_qwen_llm
+from app.agents.llms import build_structured_llm
 from app.agents.prompts import (
     SCORE_FOR_CANDIDATE_SYSTEM_PROMPT,
     SCORE_FOR_CANDIDATE_USER_PROMPT,
@@ -23,12 +24,8 @@ logger = logging.getLogger(settings.NODE_LOGGER_NAME)
 
 
 def _build_score_llm() -> RunnableWithFallbacks:
-    """构建带 fallback 的结构化评分 LLM。
-    deepseek 失败时自动降级到 qwen，保持与旧 Agent ModelFallbackMiddleware 等价的容错能力。
-    """
-    primary = get_deepseek_llm().with_structured_output(AgentCandidateScoreSchema)
-    fallback = get_qwen_llm().with_structured_output(AgentCandidateScoreSchema)
-    return RunnableWithFallbacks(runnable=primary, fallbacks=[fallback])
+    """构建带 fallback 的结构化评分 LLM（构建逻辑统一在 app.agents.llms）。"""
+    return build_structured_llm(AgentCandidateScoreSchema)
 
 
 def _build_score_messages(candidate, position) -> list:
@@ -47,7 +44,7 @@ def _build_score_messages(candidate, position) -> list:
 async def scoring_node(state: CandidateRecruitmentState) -> dict:
     """AI 评分节点（直接 LLM 调用，不再走 Agent 循环）。
 
-    用 ``with_structured_output`` 让模型直接产出 ``AgentCandidateScoreSchema``，
+    用结构化输出让模型直接产出 ``AgentCandidateScoreSchema``，
     相比 ``create_agent`` 少了一层 Agent 循环开销（无工具调用、无多轮推理）。
 
     阈值从 ``state["score_pass_threshold"]`` 读取，默认取 Settings.SCORE_PASS_THRESHOLD。
@@ -73,7 +70,11 @@ async def scoring_node(state: CandidateRecruitmentState) -> dict:
         from app.core.limiters import llm_slot
 
         async with llm_slot("llm:score"):
-            score_result: AgentCandidateScoreSchema = await llm.ainvoke(messages)
+            # 硬超时：与时间解析节点保持一致，避免模型挂起拖住整张图
+            score_result: AgentCandidateScoreSchema = await asyncio.wait_for(
+                llm.ainvoke(messages),
+                timeout=settings.LLM_CALL_TIMEOUT_SECONDS,
+            )
     except Exception as e:
         logger.error("[scoring] LLM call failed | candidate_id=%s | error=%s", cid, e)
         raise LLMServiceError(f"AI 评分调用失败: {e}") from e
@@ -128,7 +129,11 @@ async def scoring_node(state: CandidateRecruitmentState) -> dict:
     logger.info("[scoring] score saved to DB | candidate_id=%s", cid)
 
     passed = score_result.overall_score > threshold
-    next_stage = "email_invite" if passed else "rejected"
+    # 必须与 candidate_graph._route_after_scoring 的真实去向一致：
+    # 达标是进「人工闸门」（manual_decision），不是直接发邀请。
+    # 写错会让 current_stage 与实际位置脱节（检查点在闸门、状态说在发信），
+    # 排查与前端展示都会被误导。
+    next_stage = "manual_decision" if passed else "rejected"
     logger.info(
         "[scoring] done | candidate_id=%s | score=%d | next_stage=%s",
         cid, score_result.overall_score, next_stage,

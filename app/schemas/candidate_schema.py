@@ -37,7 +37,13 @@ class CandidateCreateSchema(BaseModel):
     work_year:int = Field(0,description="候选人工作经验")
 
     position_id: str = Field(..., description="候选人申请职位ID")
-    resume_id: str = Field(..., description="候选人的简历ID")
+    resume_id: str | None = Field(
+        None,
+        description=(
+            "候选人的简历ID。允许为空：线下投递 / 手工录入的候选人可以没有电子简历；"
+            "传了就必须真实存在，否则返回 400"
+        ),
+    )
     skip_scoring: bool = Field(
         False,
         description=(
@@ -67,7 +73,7 @@ class CandidateSchema(BaseModel):
     error_message: str | None = Field(None, description="异常时的错误信息")
 
     position: PositionSchema = Field(..., description="候选人申请的职位信息")
-    resume: ResumeSchema = Field(..., description="候选人的简历信息")
+    resume: ResumeSchema | None = Field(None, description="候选人的简历信息，可能为空（线下投递）")
     creator: UserSH = Field(..., description="创建该候选人的信息")
 
     model_config = ConfigDict(from_attributes=True)

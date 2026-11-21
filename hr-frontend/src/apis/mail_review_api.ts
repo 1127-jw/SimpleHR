@@ -45,6 +45,9 @@ export interface MailReview {
   reason: string
   status: string
   resolver_id?: string | null
+  /** 认领时间：仅「执行中」有值，用于并发抢占 */
+  claimed_at?: string | null
+  /** 处理完成时间 */
   resolved_at?: string | null
   resolution: string
   created_at: string

@@ -59,6 +59,11 @@ def is_waiting_on(interrupts, marker: str) -> bool:
 
     Args:
         interrupts: ``StateSnapshot.interrupts``（``tuple[Interrupt, ...]``）。
+        interrupts的数据结构：
+            @dataclass
+            class Interrupt:
+                value: Any     # 中断携带的业务数据（给前端展示：待审批工具调用、提示信息等）
+                id: str        # 中断唯一ID，用来精准 resume
         marker: ``EMAIL_REPLY_INTERRUPT`` 或 ``MANUAL_DECISION_INTERRUPT``。
 
     ``Interrupt`` 只带 ``value``，不带节点名，所以用 ``interrupt()`` 的入参做身份。

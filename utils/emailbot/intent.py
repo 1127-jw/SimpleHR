@@ -18,7 +18,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableWithFallbacks
 from pydantic import BaseModel, Field, field_validator
 
-from app.agents.llms import get_deepseek_llm, get_qwen_llm
+from app.agents.llms import build_structured_llm
 from app.core.config import get_settings
 from utils.emailbot.models import ParsedEmail
 from utils.emailbot.rules import DEFAULT_RULES, MailRule, RuleAction
@@ -128,12 +128,10 @@ _intent_llm: RunnableWithFallbacks | None = None
 
 
 def _get_intent_llm() -> RunnableWithFallbacks:
-    """懒加载带降级链的结构化分类模型（与图内节点同一套写法）。"""
+    """懒加载带降级链的结构化分类模型（构建逻辑统一在 app.agents.llms）。"""
     global _intent_llm
     if _intent_llm is None:
-        primary = get_deepseek_llm().with_structured_output(MailIntentResult)
-        fallback = get_qwen_llm().with_structured_output(MailIntentResult)
-        _intent_llm = RunnableWithFallbacks(runnable=primary, fallbacks=[fallback])
+        _intent_llm = build_structured_llm(MailIntentResult)
     return _intent_llm
 
 

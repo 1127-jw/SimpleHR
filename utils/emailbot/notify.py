@@ -86,10 +86,12 @@ def _get_graph():
 
 
 async def _waiting_reply(thread_id: str) -> bool:
-    """该 thread 的图是否停在中断点（等待候选人回复）。
+    """该 thread 的图是否停在「等待候选人回复」这个中断点。
 
-    用 ``StateSnapshot`` 判断：停在中断点时 ``next`` 非空（待执行节点），
-    图运行结束（到达 END）时 ``next`` 为空。
+    不能用 ``bool(snapshot.next)``：人工闸门（manual_decision）也是中断点，
+    ``next`` 同样非空。那样停在闸门的候选人来信时会被喂成
+    ``waiting_reply=True``，意图分类器更容易把泛泛的「好的」误判成
+    ``INTERVIEW_REPLY``。这里与恢复侧使用同一套中断点身份判定。
     """
     try:
         graph = _get_graph()
@@ -99,8 +101,7 @@ async def _waiting_reply(thread_id: str) -> bool:
         return False
     if not snapshot:
         return False
-    # next 非空 = 还有待执行节点 = 停在中断点
-    return bool(snapshot.next)
+    return is_waiting_on(snapshot.interrupts, EMAIL_REPLY_INTERRUPT)
 
 
 async def notify(email: ParsedEmail, rule: MailRule | None = None) -> MailIntentResult | None:

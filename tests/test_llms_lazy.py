@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from langchain_core.language_models.base import BaseLanguageModel
+from pydantic import BaseModel
 
 import app.agents.llms as llms
 
@@ -40,6 +41,38 @@ def test_models_are_exposed_as_factories_only() -> None:
     assert callable(llms.get_qwen_llm)
     assert not hasattr(llms, "deepseek_llm")
     assert not hasattr(llms, "qwen_llm")
+
+
+def test_structured_llm_builder_is_the_single_entry() -> None:
+    """结构化 + 降级链统一由 ``build_structured_llm`` 构建。
+
+    评分 / 时间解析 / 意图识别此前各写了一份
+    ``with_structured_output`` + ``RunnableWithFallbacks``，改一处漏两处。
+    """
+    assert callable(llms.build_structured_llm)
+
+    from langchain_core.runnables import RunnableWithFallbacks
+
+    class _Schema(BaseModel):
+        ok: bool = True
+
+    built = llms.build_structured_llm(_Schema)
+    assert isinstance(built, RunnableWithFallbacks)
+
+
+def test_no_hand_rolled_structured_builders_outside_llms() -> None:
+    """业务代码里不允许再出现 ``with_structured_output``（llms.py 除外）。"""
+    offenders = []
+    for path in list(Path("app").rglob("*.py")) + list(Path("utils").rglob("*.py")):
+        if path.name == "llms.py" or "__pycache__" in str(path):
+            continue
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), 1
+        ):
+            if "with_structured_output" in line and not line.lstrip().startswith("#"):
+                # 文档字符串里的提及是允许的（不在行首即视为说明文字）
+                offenders.append(f"{path}:{lineno}")
+    assert offenders == [], "结构化输出构建应收敛到 app/agents/llms.py：" + "、".join(offenders)
 
 
 def test_import_app_main_survives_hostile_no_proxy() -> None:

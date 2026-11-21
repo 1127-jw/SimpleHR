@@ -104,7 +104,11 @@ class CandidateModel(BaseModel):
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
 
     position_id: Mapped[str] = mapped_column(ForeignKey("positions.id"))
-    resume_id: Mapped[str] = mapped_column(ForeignKey("resumes.id"))
+    # 简历允许为空：线下投递 / 手工录入的候选人可能没有电子简历。
+    # 唯一索引允许多个 NULL（PostgreSQL 语义），不影响「一份简历只挂一个候选人」。
+    resume_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("resumes.id"), nullable=True
+    )
     # 这条数据是由谁创建的
     creator_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
 

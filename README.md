@@ -200,7 +200,7 @@ simplejob/
 │   ├── ocr_service.py           # PaddleOCR 云端 API 封装
 │   ├── PDFser.py                # Word → PDF 转换
 │   └── available_time.py        # 空闲时段计算算法
-├── tests/                       # pytest 测试套件（286 个用例）
+├── tests/                       # pytest 测试套件（288 个用例）
 ├── scripts/                     # 运维脚本
 │   ├── backup.sh                # 数据库备份
 │   ├── deploy.sh                # 部署脚本
@@ -591,7 +591,7 @@ tests/
 ├── test_graph_routes.py            # 状态图路由（27）
 ├── test_hardening.py               # 安全加固（6）
 ├── test_intent.py                  # 意图识别 + evidence 清洗（11）
-├── test_llms_lazy.py               # LLM 客户端懒加载（3）
+├── test_llms_lazy.py               # LLM 客户端懒加载 + 构建收敛守卫（5）
 ├── test_logging_routing.py         # 日志分流（9）
 ├── test_mail_review.py             # 意图复核（7）
 ├── test_manual_decision.py         # 人工闸门 / 中断点身份（16）
@@ -603,7 +603,7 @@ tests/
 ├── test_scheduler.py               # 后台调度与重试（28）
 └── test_time_policy.py             # 时区策略（16）
 
-# 合计 286 个用例
+# 合计 288 个用例
 ```
 
 ## 📧 邮件机器人
@@ -638,7 +638,7 @@ tests/
 | [`docs/candidate_status_history_design.md`](docs/candidate_status_history_design.md) | 状态变更链（`candidate_status_history`）设计 |
 | [`docs/change2026-11-19.md`](docs/change2026-11-19.md) | 变更记录 11-19（节点拆分、人工闸门、四项事故修复、状态链落地） |
 | [`docs/change2026-11-20.md`](docs/change2026-11-20.md) | 变更记录 11-20（流程脱节修复、回复兜底、检查点连接池、四项收尾） |
-| [`事故汇总.md`](事故汇总.md) | 6 起缺陷事故的现象 / 根因 / 修复 / 教训与共性分析 |
+| [`事故汇总.md`](事故汇总.md) | 21 起事故的现象 / 根因 / 修复 / 教训、5 类共性根因与部署前检查清单 |
 
 ---
 

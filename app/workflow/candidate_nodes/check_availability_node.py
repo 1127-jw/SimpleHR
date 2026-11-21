@@ -1,14 +1,16 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, time
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import RunnableWithFallbacks
 
-from app.agents.llms import get_deepseek_llm, get_qwen_llm
+from app.agents.llms import build_structured_llm
 from app.agents.prompts import PROPOSED_TIME_SYSTEM_PROMPT
 from app.core.config import get_settings
 from app.core.exceptions import (
     DingTalkServiceError,
+    LLMServiceError,
     NegotiationError,
 )
 from app.schemas.intent_schema import ProposedTime
@@ -41,10 +43,8 @@ def _build_current_time_text() -> str:
 
 
 def _build_time_llm() -> RunnableWithFallbacks:
-    """构建带 fallback 的结构化时间解析 LLM。"""
-    primary = get_deepseek_llm().with_structured_output(ProposedTime)
-    fallback = get_qwen_llm().with_structured_output(ProposedTime)
-    return RunnableWithFallbacks(runnable=primary, fallbacks=[fallback])
+    """构建带 fallback 的结构化时间解析 LLM（构建逻辑统一在 app.agents.llms）。"""
+    return build_structured_llm(ProposedTime)
 
 
 # ==================== 检查函数 ====================
@@ -183,8 +183,21 @@ async def _extract_time_from_reply(state: CandidateRecruitmentState, reply: str)
 
     from app.core.limiters import llm_slot
 
-    async with llm_slot("llm:time_parse"):
-        result: ProposedTime = await llm.ainvoke(messages)
+    try:
+        async with llm_slot("llm:time_parse"):
+            # 硬超时：模型侧挂起时不能无限等。ChatOpenAI 这里没有显式设置
+            # 请求超时，取 SDK 默认值可能长达数分钟，会拖住整个图。
+            result: ProposedTime = await asyncio.wait_for(
+                llm.ainvoke(messages),
+                timeout=settings.LLM_CALL_TIMEOUT_SECONDS,
+            )
+    except Exception as e:
+        # 基础设施故障（超时/限流/网络/结构化输出失败）**不能**伪装成
+        # 「候选人没给出有效时间」：那会让节点消耗一轮协商，连续几次模型
+        # 抖动就把候选人判成「协商超时」。这里统一包成 ExternalServiceError，
+        # 由 node_error_wrapper 透传 → 外层标记 PROCESSING_ERROR（可人工重试）。
+        logger.error("[check_avail] 时间解析调用失败 | error=%s", e)
+        raise LLMServiceError(f"解析候选人时间失败: {e}") from e
     logger.info(
         "[check_avail] LLM parsed | confirm=%s | refused=%s | proposed_time=%s | exactly=%s",
         result.confirm, result.refused, result.proposed_time, result.exactly,
@@ -318,8 +331,10 @@ async def check_availability_node(state: CandidateRecruitmentState) -> dict:
     # 1. LLM 提取结构化时间（时间已注入 Prompt，无需工具）
     try:
         pt = await _extract_time_from_reply(state, reply)
-    except Exception as e:
-        logger.error("[check_avail] LLM parse failed | candidate_id=%s | error=%s", cid, e)
+    except NegotiationError as e:
+        # 业务性失败（模型能跑，但这条回复无法映射成结构化时间）：
+        # 消耗一轮协商是合理的。
+        logger.warning("[check_avail] LLM 无法解析回复 | candidate_id=%s | error=%s", cid, e)
         return await can_not_find_available_time(state)
 
     # 明确拒绝

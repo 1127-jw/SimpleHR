@@ -89,17 +89,16 @@ async def create_candidate(
     current_user:Annotated[UserModel,Depends(get_current_user)],
     background_tasks: BackgroundTasks,
 ):
-    candidate_schema, position_schema, interviewer_schema= await create_candidate_ser(session,current_user,candidate_data)
-
     # 「跳过筛选」等于绕过 AI 评估，只允许 HR / 超管使用。
     # 普通员工即使传了也直接拒绝，避免越权。
     if candidate_data.skip_scoring and not (
-        current_user.is_hr or current_user.is_superuser
+            current_user.is_hr or current_user.is_superuser
     ):
         raise HTTPException(
             status_code=403,
             detail="仅 HR / 超管可跳过 AI 筛选与评分",
         )
+    candidate_schema, position_schema, interviewer_schema= await create_candidate_ser(session,current_user,candidate_data)
 
     background_tasks.add_task(
         run_candidate_agent,
@@ -280,13 +279,27 @@ async def update_candidate_status(
         if status_data.status == CandidateStatusEnum.WAITING_FOR_INTERVIEW:
             if not status_data.interview_time:
                 raise HTTPException(status_code=400, detail="变更为待面试时必须填写面试时间")
-            await interview_repo.create_interview(
-                dict(
-                    scheduled_time=status_data.interview_time,
-                    candidate_id=candidate_id,
-                    interviewer_id=current_user.id,
+            # 面试记录与候选人是 1:1（candidate_id 上有唯一约束）。
+            # 无条件 create 会在「人工重试后已有面试记录」时撞唯一约束 → 500，
+            # 因此与 confirm_node 保持同一口径：存在则更新，不存在才创建。
+            existing_interview = await interview_repo.get_by_candidate_id(candidate_id)
+            if existing_interview is not None:
+                await interview_repo.update_interview(
+                    interview_id=existing_interview.id,
+                    interview_dict={
+                        "scheduled_time": status_data.interview_time,
+                        "interviewer_id": current_user.id,
+                        "result": InterviewResultEnum.PENDING,
+                    },
                 )
-            )
+            else:
+                await interview_repo.create_interview(
+                    dict(
+                        scheduled_time=status_data.interview_time,
+                        candidate_id=candidate_id,
+                        interviewer_id=current_user.id,
+                    )
+                )
         elif status_data.status == CandidateStatusEnum.INTERVIEW_REJECTED:
             if not status_data.rejection_reason:
                 raise HTTPException(status_code=400, detail="变更为面试未通过时必须填写未通过原因")
@@ -296,7 +309,7 @@ async def update_candidate_status(
                 await interview_repo.update_interview(
                     interview_id=interview.id,
                     interview_dict={
-                        "feeback": status_data.rejection_reason,
+                        "feedback": status_data.rejection_reason,
                         "result": InterviewResultEnum.FAILED,
                     }
                 )
@@ -354,11 +367,15 @@ async def get_candidate_ai_score(
 @router.get("/candidate/distribution", summary="候选人分布统计（学历/状态/职位）")
 async def get_candidate_distribution(
     session:Annotated[AsyncSession, Depends(get_db)],
-    _: UserModel = Depends(get_current_user),
+    current_user: UserModel = Depends(get_current_user),
 ):
-    """看板三个饼图的数据源"""
+    """看板三个饼图的数据源。
+
+    必须按用户可见范围聚合：否则任意登录用户都能读到全公司的候选人分布，
+    与列表/下载/改状态/评分的可见性口径不一致。
+    """
     async with session.begin():
-        return await candidate_distribution_ser(session)
+        return await candidate_distribution_ser(session, current_user)
 
 
 @router.get("/candidate/7d", summary="获取最近7天系统中新增候选人的数量")
